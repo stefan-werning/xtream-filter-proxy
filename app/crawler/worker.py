@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import threading
 import time
 
@@ -151,24 +152,6 @@ class CrawlerWorker:
             self._last_sync_ts = time.time()
 
         client = UpstreamClient(cfg)
-        try:
-            user_info = await client.player_api({"action": ""})
-        except UpstreamError:
-            user_info = None
-
-        if user_info and isinstance(user_info, dict):
-            info = user_info.get("user_info", {})
-            try:
-                active = int(info.get("active_cons", 0))
-                max_conns = int(info.get("max_connections", 999))
-            except (TypeError, ValueError):
-                active, max_conns = 0, 999
-            reserve = cfg["crawler"].get("reserve_slots", 1)
-            if active >= max_conns - reserve:
-                self._set_status(STATUS_WAITING_FOR_SLOT)
-                recheck = cfg["crawler"].get("slot_recheck_seconds", 60)
-                await self._sleep_checking_stop(recheck)
-                return
 
         item = self._next_pending_item(cfg)
         if item is None:
@@ -177,10 +160,40 @@ class CrawlerWorker:
             return
 
         self._set_status(STATUS_RUNNING, current_item=f"{item['kind']}:{item['item_id']}")
-        await self._probe_item(cfg, client, item)
+        blocked = await self._probe_item(cfg, client, item)
+        if blocked:
+            # This item needed ffprobe (a real stream connection) but the
+            # account's only slot(s) were busy -- it's been pushed back in
+            # the queue (see _probe_item), not penalized. Move straight on
+            # to the next iteration so a different, possibly API-only item
+            # gets picked immediately instead of idling here.
+            self._set_status(STATUS_WAITING_FOR_SLOT)
+            return
 
         delay = cfg["crawler"].get("request_delay_seconds", 1.0)
         await self._sleep_checking_stop(delay)
+
+    async def _has_free_slot(self, cfg: dict, client: UpstreamClient) -> bool:
+        """Checks the account's connection slot -- only relevant right
+        before something that opens a real stream connection (ffprobe).
+        Plain player_api calls (get_vod_info, get_series_info, list
+        actions) don't count against active_cons, so they never need this.
+        """
+        try:
+            user_info = await client.player_api({"action": ""})
+        except UpstreamError:
+            return True  # can't tell -- don't block on an unknown state
+
+        if not user_info or not isinstance(user_info, dict):
+            return True
+        info = user_info.get("user_info", {})
+        try:
+            active = int(info.get("active_cons", 0))
+            max_conns = int(info.get("max_connections", 999))
+        except (TypeError, ValueError):
+            return True
+        reserve = cfg["crawler"].get("reserve_slots", 1)
+        return active < max_conns - reserve
 
     async def _sleep_checking_stop(self, seconds: float) -> None:
         end = time.time() + seconds
@@ -221,13 +234,32 @@ class CrawlerWorker:
         kind = item["kind"]
         item_id = item["item_id"]
         now = int(time.time())
+        name = self._item_name(kind, item_id)
 
         try:
-            tracks, source = await self._fetch_tracks(cfg, client, kind, item_id)
+            tracks, source, blocked = await self._fetch_tracks(cfg, client, kind, item_id)
         except Exception as e:
             logger.exception("probe failed for %s:%s", kind, item_id)
             self._mark_probe(kind, item_id, "error", None, str(e))
-            return
+            self.db.log("info", f"probe {kind}:{item_id} '{name}' -> error: {e}")
+            invalidate_filter_cache()
+            data_version.bump()
+            return False
+
+        if blocked:
+            # Stays 'pending' (not a failure -- priority is untouched so it
+            # doesn't lose its place in line), but next_try is pushed back
+            # briefly so _next_pending_item picks a *different* item next
+            # time instead of re-selecting this same ffprobe-blocked one
+            # over and over while a slot is busy. Items that only need the
+            # API (no ffprobe) are never blocked, so they keep flowing.
+            recheck = cfg["crawler"].get("slot_recheck_seconds", 60)
+            with self.db.cursor() as cur:
+                cur.execute(
+                    "UPDATE probe_state SET next_try = ? WHERE kind = ? AND item_id = ?",
+                    (now + recheck, kind, item_id),
+                )
+            return True
 
         if tracks:
             with self.db.cursor() as cur:
@@ -239,11 +271,21 @@ class CrawlerWorker:
                         (kind, item_id, t.track_idx, t.language, t.title, t.codec, t.channels, t.match_text),
                     )
             self._mark_probe(kind, item_id, "ok", source, None)
+            langs = ", ".join(t.language or "?" for t in tracks)
+            self.db.log("info", f"probe {kind}:{item_id} '{name}' -> ok via {source} ({langs})")
         else:
             self._mark_probe(kind, item_id, "no_audio_info", source, None)
+            self.db.log("info", f"probe {kind}:{item_id} '{name}' -> no_audio_info via {source}")
 
         invalidate_filter_cache()
         data_version.bump()
+        return False
+
+    def _item_name(self, kind: str, item_id: str) -> str:
+        row = self.db.conn.execute(
+            "SELECT name FROM items WHERE kind = ? AND item_id = ?", (kind, item_id)
+        ).fetchone()
+        return row["name"] if row else item_id
 
     async def _fetch_tracks(self, cfg: dict, client: UpstreamClient, kind: str, item_id: str):
         """Raises ffprobe.FfprobeFailedError (uncaught here, on purpose) if
@@ -269,24 +311,61 @@ class CrawlerWorker:
         elif kind == "series":
             tracks = self._extract_series_tracks(payload)
 
-        if tracks:
-            return tracks, "api"
+        # Some providers' get_vod_info/get_series_info return only a single
+        # audio entry even when the actual container has several tracks --
+        # e.g. just a Portuguese dub, while the real stream also has German.
+        # Trusting the API blindly here would make the language filter miss
+        # a track that's actually there. If the API result doesn't already
+        # contain a track matching the configured include filter, fall
+        # through to ffprobe (subject to the same slot check as the
+        # no-tracks-at-all case) and merge its findings in, instead of
+        # returning early.
+        ffprobe_needed = not tracks or not self._tracks_satisfy_include(tracks, cfg, kind)
+
+        if tracks and not ffprobe_needed:
+            return tracks, "api", False
 
         last_attempted_source = "api"
-        if cfg.get("ffprobe", {}).get("enabled", False) and ffprobe_available(cfg["ffprobe"].get("binary", "ffprobe")):
+        if ffprobe_needed and cfg.get("ffprobe", {}).get("enabled", False) and ffprobe_available(cfg["ffprobe"].get("binary", "ffprobe")):
             stream_url = self._guess_stream_url(cfg, client, kind, item_id, payload)
             if stream_url:
+                # ffprobe opens a real stream connection -- only attempt it
+                # if the account actually has a free slot right now. If not,
+                # report "blocked" so the caller retries this same item
+                # later without a backoff penalty, instead of recording it
+                # as no_audio_info/using an incomplete API result just
+                # because a slot wasn't available.
+                if not await self._has_free_slot(cfg, client):
+                    return [], "api", True
                 last_attempted_source = "ffprobe"
                 result = await run_ffprobe(
                     stream_url,
                     cfg["ffprobe"].get("binary", "ffprobe"),
                     cfg["ffprobe"].get("timeout_seconds", 25),
                 )
-                tracks = parse_audio_tracks(result)
-                if tracks:
-                    return tracks, "ffprobe"
+                ffprobe_tracks = parse_audio_tracks(result)
+                if ffprobe_tracks:
+                    # ffprobe sees the real container, so it supersedes a
+                    # partial API result rather than being merged with it --
+                    # merging could double-count the same track under two
+                    # slightly different tag spellings.
+                    return ffprobe_tracks, "ffprobe", False
 
-        return [], last_attempted_source
+        if tracks:
+            return tracks, "api", False
+        return [], last_attempted_source, False
+
+    def _tracks_satisfy_include(self, tracks: list, cfg: dict, kind: str) -> bool:
+        """True if at least one track matches the configured audio include
+        filter for this kind, or if there's no include filter to satisfy
+        (nothing to double-check via ffprobe in that case).
+        """
+        audio_cfg = cfg.get("audio_filters", {}).get(kind, {})
+        include = audio_cfg.get("include", [])
+        if not include:
+            return True
+        patterns = [re.compile(p) for p in include]
+        return any(any(p.search(t.match_text) for p in patterns) for t in tracks)
 
     def _extract_series_tracks(self, payload) -> list:
         """Series info returns episodes grouped by season; probe the first
@@ -320,6 +399,29 @@ class CrawlerWorker:
             if row and row["container_ext"]:
                 ext = row["container_ext"]
             return client.build_redirect_url("movie", f"{item_id}.{ext}")
+        if kind == "series":
+            episode = self._first_episode(payload)
+            if episode is None:
+                return None
+            ep_id = episode.get("id")
+            if ep_id is None:
+                return None
+            ext = episode.get("container_extension") or "mp4"
+            return client.build_redirect_url("series", f"{ep_id}.{ext}")
+        return None
+
+    def _first_episode(self, payload) -> dict | None:
+        if not isinstance(payload, dict):
+            return None
+        episodes = payload.get("episodes")
+        if not isinstance(episodes, dict):
+            return None
+        for _season, ep_list in episodes.items():
+            if not isinstance(ep_list, list):
+                continue
+            for ep in ep_list:
+                if isinstance(ep, dict):
+                    return ep
         return None
 
     def _mark_probe(self, kind: str, item_id: str, status: str, source: str | None, error: str | None) -> None:

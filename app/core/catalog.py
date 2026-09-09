@@ -109,6 +109,63 @@ def compute_visible_for_kind(
     return visible_ids, visible_categories
 
 
+def compute_hidden_breakdown_for_kind(
+    db: Database,
+    config: dict,
+    kind: str,
+    category_names: dict[str, str] | None = None,
+) -> dict[str, int]:
+    """Counts, among currently non-visible items, how many were excluded by
+    each filter stage -- category, title, or audio -- so the UI can explain
+    *why* an item isn't visible instead of lumping every reason into one
+    'hidden by category filter' number. An item is attributed to the first
+    stage that would reject it, in the same order compute_visible_for_kind
+    checks them (manual overrides bypass all of this, same as there).
+    """
+    title_cfg = config["title_filters"][kind]
+    match_category = title_cfg.get("match_category", False)
+    category_names = category_names or {}
+    excluded_category_ids = excluded_category_ids_for_kind(config, kind)
+
+    audio_cfg = config.get("audio_filters", {}).get(kind) if kind in ("vod", "series") else None
+    on_unknown = config.get("audio_filters", {}).get("on_unknown", "keep")
+    audio_info = _load_audio_info(db, kind) if kind in ("vod", "series") else {}
+
+    overridden_ids: set[str] = set(
+        row["item_id"] for row in db.conn.execute(
+            "SELECT item_id FROM manual_overrides WHERE kind = ?", (kind,)
+        ).fetchall()
+    )
+
+    counts = {"category": 0, "title": 0, "audio": 0}
+    cur = db.conn.execute(
+        "SELECT item_id, name, category_id FROM items WHERE kind = ? AND removed_at IS NULL",
+        (kind,),
+    )
+    for row in cur.fetchall():
+        item_id = row["item_id"]
+        if item_id in overridden_ids:
+            continue
+        name = row["name"]
+        category_id = row["category_id"]
+
+        if category_id is not None and str(category_id) in excluded_category_ids:
+            counts["category"] += 1
+            continue
+
+        cat_name = category_names.get(str(category_id)) if category_id is not None else None
+        if not title_passes(name, cat_name, title_cfg, match_category):
+            counts["title"] += 1
+            continue
+
+        if audio_cfg is not None:
+            info = audio_info.get(item_id, ItemAudioInfo(match_texts=[], has_known_tracks=False))
+            if not audio_passes(info.match_texts, audio_cfg, on_unknown, info.has_known_tracks):
+                counts["audio"] += 1
+
+    return counts
+
+
 def excluded_category_ids_for_kind(config: dict, kind: str) -> set[str]:
     return set(
         str(c) for c in config.get("category_filters", {}).get(kind, {}).get("excluded_ids", [])

@@ -111,6 +111,13 @@
   .badge.no_audio_info { background: var(--badge-unknown-bg); color: var(--badge-unknown-fg); }
   .status-line { font-size: 14px; margin-bottom: 8px; }
   .hint { color: var(--hint-fg); font-size: 12px; }
+  .info-icon { color: var(--hint-fg); cursor: pointer; font-size: 13px; margin-left: 4px; }
+  .info-popover {
+    position: fixed; z-index: 1000;
+    background: var(--card-bg); color: var(--fg); border: 1px solid var(--card-border);
+    border-radius: 6px; padding: 10px 12px; font-size: 12.5px; line-height: 1.5;
+    width: max-content; max-width: min(90vw, 420px); box-shadow: 0 4px 16px rgba(0,0,0,0.2); white-space: pre-line;
+  }
   .tab { display: none; }
   .tab.active { display: block; }
   pre.log { max-height: 300px; overflow: auto; background: var(--log-bg); color: var(--log-fg); padding: 10px; border-radius: 4px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
@@ -333,7 +340,9 @@ const I18N = {
     'dash.status': 'Crawler status:', 'dash.pause': 'Pause', 'dash.resume': 'Resume',
     'dash.syncNow': 'Sync now', 'dash.resetProbes': 'Reset all probes', 'dash.progress': 'Progress',
     'dash.recentLog': 'Recent log', 'dash.total': 'Total', 'dash.visible': 'Visible',
-    'dash.statusBreakdown': 'Status breakdown', 'dash.hiddenByCategory': 'hidden by category filter',
+    'dash.statusBreakdown': 'Status breakdown',
+    'dash.byCategory': 'hidden by category filter', 'dash.byTitle': 'hidden by title filter',
+    'dash.byAudio': 'hidden by audio filter / unprobed', 'dash.hiddenGeneric': 'hidden',
     'settings.upstream': 'Upstream', 'settings.baseUrl': 'Base URL', 'settings.username': 'Username',
     'settings.password': 'Password', 'settings.passwordPlaceholder': 'leave blank to keep',
     'settings.crawler': 'Crawler', 'settings.ffprobeEnabled': 'ffprobe enabled',
@@ -440,9 +449,16 @@ async function refreshStats() {
     const s = j[kind];
     const parts = Object.entries(s.by_status || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
     const hiddenCount = s.total - s.visible;
-    const visibleCell = hiddenCount > 0
-      ? `${s.visible} <span class="hint">(${hiddenCount} ${t('dash.hiddenByCategory')})</span>`
-      : `${s.visible}`;
+    let visibleCell = `${s.visible}`;
+    if (hiddenCount > 0) {
+      const b = s.hidden_breakdown || {};
+      const reasons = [];
+      if (b.category) reasons.push(`${b.category} ${t('dash.byCategory')}`);
+      if (b.title) reasons.push(`${b.title} ${t('dash.byTitle')}`);
+      if (b.audio) reasons.push(`${b.audio} ${t('dash.byAudio')}`);
+      const detail = reasons.length ? reasons.join(', ') : `${hiddenCount} ${t('dash.hiddenGeneric')}`;
+      visibleCell = `${s.visible} ${infoIcon('visible-' + kind, detail)}`;
+    }
     html += `<tr><td>${kind}</td><td>${s.total}</td><td>${visibleCell}</td><td>${parts}</td></tr>`;
   }
   html += '</table></div>';
@@ -452,17 +468,71 @@ async function refreshStats() {
   if (!eta || eta.pending_count === 0) {
     $('eta-line').textContent = 'All pending titles have been probed.';
   } else if (eta.avg_seconds_per_item == null) {
-    $('eta-line').textContent = `${eta.pending_count} titles pending — not enough history yet to estimate time remaining.`;
+    $('eta-line').textContent = `${eta.pending_count} titles pending — estimating…`;
   } else {
-    const activeStr = formatDuration(eta.eta_seconds_active);
     const hoursPerDay = windowHoursPerDay(lastLoadedConfig);
     const calendarSeconds = eta.eta_seconds_active / hoursPerDay * 24;
     const calendarStr = formatDuration(calendarSeconds);
-    const windowNote = hoursPerDay < 24 ? ` (~${calendarStr} at your current ${hoursPerDay.toFixed(1)}h/day crawl window)` : '';
-    $('eta-line').textContent =
-      `${eta.pending_count} titles pending, ~${eta.avg_seconds_per_item}s/title → ~${activeStr} of active crawling left${windowNote}.`;
+    const activeStr = formatDuration(eta.eta_seconds_active);
+    const perKindLines = Object.entries(eta.per_kind || {})
+      .filter(([, k]) => k.pending_count > 0)
+      .map(([kind, k]) => `${kind}: ${k.pending_count} pending, ${k.avg_seconds_per_item != null ? '~' + k.avg_seconds_per_item + 's/title' : 'estimating…'}`)
+      .join('\n');
+    const detail = `${eta.pending_count} titles pending, ~${activeStr} of active crawling time` +
+      (hoursPerDay < 24 ? ` (${hoursPerDay.toFixed(1)}h/day crawl window)` : '') +
+      (perKindLines ? `\n${perKindLines}` : '');
+    $('eta-line').innerHTML = `~${calendarStr} remaining ${infoIcon('eta', detail)}`;
   }
+  restoreOpenPopover();
 }
+
+let openPopoverId = null;
+
+function infoIcon(id, detail) {
+  return `<span class="info-icon" data-popover-id="${id}" data-detail="${detail.replace(/"/g, '&quot;')}">ⓘ</span>`;
+}
+
+function restoreOpenPopover() {
+  if (!openPopoverId) return;
+  const icon = document.querySelector(`.info-icon[data-popover-id="${openPopoverId}"]`);
+  if (icon) showPopover(icon);
+}
+
+function showPopover(icon) {
+  closePopover();
+  const bubble = document.createElement('div');
+  bubble.className = 'info-popover';
+  bubble.textContent = icon.dataset.detail;
+  document.body.appendChild(bubble);
+
+  const rect = icon.getBoundingClientRect();
+  const maxLeft = window.innerWidth - bubble.offsetWidth - 12;
+  bubble.style.top = `${rect.bottom + 4}px`;
+  bubble.style.left = `${Math.max(8, Math.min(rect.left, maxLeft))}px`;
+
+  openPopoverId = icon.dataset.popoverId;
+}
+
+function closePopover() {
+  document.querySelectorAll('.info-popover').forEach(el => el.remove());
+  openPopoverId = null;
+}
+
+document.addEventListener('click', (e) => {
+  const icon = e.target.closest('.info-icon');
+  if (icon) {
+    e.stopPropagation();
+    if (openPopoverId === icon.dataset.popoverId) {
+      closePopover();
+    } else {
+      showPopover(icon);
+    }
+    return;
+  }
+  if (!e.target.closest('.info-popover')) {
+    closePopover();
+  }
+});
 
 async function refreshLog() {
   const r = await fetch('/api/logs?limit=50');

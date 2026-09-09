@@ -6,7 +6,12 @@ import time
 from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 
-from app.core.catalog import compute_visible_for_kind, data_version, invalidate_filter_cache
+from app.core.catalog import (
+    compute_hidden_breakdown_for_kind,
+    compute_visible_for_kind,
+    data_version,
+    invalidate_filter_cache,
+)
 from app.core.config import ConfigError
 from app.core.filters import audio_passes, title_passes
 
@@ -184,47 +189,84 @@ async def get_stats(request: Request):
                 (kind,),
             )
             by_status = {r["status"]: r["c"] for r in cur.fetchall()}
-        out[kind] = {"total": total, "visible": len(visible_ids), "by_status": by_status}
+
+        hidden_breakdown = {}
+        hidden_total = total - len(visible_ids)
+        if hidden_total > 0:
+            hidden_breakdown = compute_hidden_breakdown_for_kind(db, cfg, kind, category_names)
+
+        out[kind] = {
+            "total": total,
+            "visible": len(visible_ids),
+            "by_status": by_status,
+            "hidden_breakdown": hidden_breakdown,
+        }
 
     out["eta"] = _estimate_probe_eta(db)
     return JSONResponse(out)
 
 
-def _estimate_probe_eta(db, sample_size: int = 50) -> dict:
-    """Estimates remaining crawl time from the average gap between the last
-    `sample_size` completed probes (vod+series share one crawler thread, so
-    they're sampled together). Returns None fields if there isn't enough
-    history yet or nothing is pending.
+def _estimate_probe_rate(db, kind: str, sample_size: int = 50) -> float | None:
+    """Average seconds between the last `sample_size` completed probes for
+    one kind. None if there's not enough history yet.
     """
-    pending_count = db.conn.execute(
-        "SELECT COUNT(*) c FROM probe_state WHERE status = 'pending'"
-    ).fetchone()["c"]
-
-    if pending_count == 0:
-        return {"pending_count": 0, "avg_seconds_per_item": None, "eta_seconds_active": 0}
-
     rows = db.conn.execute(
-        "SELECT last_try FROM probe_state WHERE status IN ('ok', 'no_audio_info', 'error') "
+        "SELECT last_try FROM probe_state WHERE kind = ? AND status IN ('ok', 'no_audio_info', 'error') "
         "AND last_try IS NOT NULL ORDER BY last_try DESC LIMIT ?",
-        (sample_size,),
+        (kind, sample_size),
     ).fetchall()
-
     if len(rows) < 2:
-        return {"pending_count": pending_count, "avg_seconds_per_item": None, "eta_seconds_active": None}
-
+        return None
     timestamps = sorted(r["last_try"] for r in rows)
     span = timestamps[-1] - timestamps[0]
-    avg_seconds = span / (len(timestamps) - 1) if span > 0 else None
+    return span / (len(timestamps) - 1) if span > 0 else None
 
-    if avg_seconds is None:
-        return {"pending_count": pending_count, "avg_seconds_per_item": None, "eta_seconds_active": None}
+
+def _estimate_probe_eta(db, sample_size: int = 50) -> dict:
+    """Estimates remaining crawl time using a separate average rate per
+    kind (vod vs series), rather than one blended average -- vod usually
+    needs ffprobe (which can wait on a busy connection slot) while series
+    is often resolved by the API alone in a fraction of a second on some
+    providers, so mixing them into a single rate badly over- or
+    under-estimates depending on which kind happened to run most recently.
+    """
+    per_kind = {}
+    total_pending = 0
+    known_seconds = 0.0
+    unknown_pending = 0
+
+    for kind in ("vod", "series"):
+        pending = db.conn.execute(
+            "SELECT COUNT(*) c FROM probe_state WHERE kind = ? AND status = 'pending'", (kind,)
+        ).fetchone()["c"]
+        total_pending += pending
+        rate = _estimate_probe_rate(db, kind, sample_size) if pending > 0 else None
+        per_kind[kind] = {"pending_count": pending, "avg_seconds_per_item": round(rate, 1) if rate else None}
+        if rate is not None:
+            known_seconds += rate * pending
+        else:
+            unknown_pending += pending
+
+    if total_pending == 0:
+        return {"pending_count": 0, "avg_seconds_per_item": None, "eta_seconds_active": 0, "per_kind": per_kind}
+
+    if known_seconds == 0 and unknown_pending > 0:
+        return {"pending_count": total_pending, "avg_seconds_per_item": None, "eta_seconds_active": None, "per_kind": per_kind}
+
+    # Kinds without enough history yet fall back to the overall known
+    # average so they don't just vanish from the estimate.
+    if unknown_pending > 0:
+        known_count = total_pending - unknown_pending
+        fallback_rate = known_seconds / known_count
+        known_seconds += fallback_rate * unknown_pending
 
     return {
-        "pending_count": pending_count,
-        "avg_seconds_per_item": round(avg_seconds, 1),
+        "pending_count": total_pending,
+        "avg_seconds_per_item": round(known_seconds / total_pending, 1),
         # active crawling time only -- does not account for time outside
         # the crawl schedule window, where no probing happens at all.
-        "eta_seconds_active": round(avg_seconds * pending_count),
+        "eta_seconds_active": round(known_seconds),
+        "per_kind": per_kind,
     }
 
 
