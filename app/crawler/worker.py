@@ -25,6 +25,7 @@ STATUS_RUNNING = "running"
 STATUS_PAUSED = "paused"
 STATUS_OUTSIDE_WINDOW = "outside_window"
 STATUS_WAITING_FOR_SLOT = "waiting_for_slot"
+STATUS_SYNCING = "syncing"
 
 
 class CrawlerWorker:
@@ -156,6 +157,11 @@ class CrawlerWorker:
 
         sync_interval = cfg["crawler"].get("sync_interval_minutes", 360) * 60
         if time.time() - self._last_sync_ts >= sync_interval:
+            # A full sync can take a while (upstream round-trips for every
+            # kind, plus a big DB pass) -- set status up front instead of
+            # leaving whatever the *previous* iteration's status was
+            # showing (e.g. a stale "outside_window") until it finishes.
+            self._set_status(STATUS_SYNCING)
             try:
                 client = UpstreamClient(cfg)
                 await run_full_sync(
