@@ -386,6 +386,7 @@ const I18N = {
     'js.saved': 'Saved.', 'js.conflictSettings': 'Conflict: settings were changed elsewhere. Reloading current values — please re-apply your edits.',
     'js.conflictCats': 'Conflict: settings changed elsewhere, please retry.', 'js.error': 'Error:',
     'js.syncing': 'Syncing…', 'js.confirmReset': 'Reset all probe states?', 'js.pass': 'pass',
+    'js.loading': 'Loading…',
     'js.passedSample': 'Passed (sample)', 'js.filteredSample': 'Filtered out (sample)',
     'status.running': 'running', 'status.paused': 'paused', 'status.outside_window': 'outside window',
     'status.waiting_for_slot': 'waiting for connection slot', 'status.idle': 'idle',
@@ -733,11 +734,18 @@ let excludedCategoryIds = new Set();
 
 async function loadCategories() {
   const kind = $('cats-kind').value;
-  const r = await fetch('/api/categories?kind=' + kind);
-  const j = await r.json();
-  allCategories = j.categories;
-  excludedCategoryIds = new Set(allCategories.filter(c => c.excluded).map(c => c.category_id));
-  renderCategories();
+  const tbody = document.querySelector('#cats-table tbody');
+  tbody.innerHTML = `<tr><td colspan="3" class="hint">${t('js.loading')}</td></tr>`;
+  $('cats-msg').textContent = t('js.loading');
+  try {
+    const r = await fetch('/api/categories?kind=' + kind);
+    const j = await r.json();
+    allCategories = j.categories;
+    excludedCategoryIds = new Set(allCategories.filter(c => c.excluded).map(c => c.category_id));
+    renderCategories();
+  } catch (e) {
+    $('cats-msg').textContent = t('js.error') + ' ' + e;
+  }
 }
 
 function renderCategories() {

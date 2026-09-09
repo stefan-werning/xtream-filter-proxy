@@ -193,7 +193,9 @@ async def get_stats(request: Request):
         hidden_breakdown = {}
         hidden_total = total - len(visible_ids)
         if hidden_total > 0:
-            hidden_breakdown = compute_hidden_breakdown_for_kind(db, cfg, kind, category_names)
+            hidden_breakdown = compute_hidden_breakdown_for_kind(
+                db, cfg, kind, category_names, config_version, data_version.value
+            )
 
         out[kind] = {
             "total": total,

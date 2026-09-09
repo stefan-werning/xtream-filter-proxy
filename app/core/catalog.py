@@ -4,13 +4,17 @@ import time
 from dataclasses import dataclass
 
 from app.core.db import Database
-from app.core.filters import FilterCache, audio_passes, title_passes
+from app.core.filters import FilterCache, audio_passes, compile_filter, title_passes
 
 _filter_cache = FilterCache()
+_hidden_breakdown_cache: dict[str, tuple[int, int, dict[str, int]]] = {}
+# kind -> (config_version, data_version, breakdown) -- separate from
+# _filter_cache since it's keyed the same way but holds a different shape.
 
 
 def invalidate_filter_cache() -> None:
     _filter_cache.invalidate()
+    _hidden_breakdown_cache.clear()
 
 
 @dataclass
@@ -65,9 +69,13 @@ def compute_visible_for_kind(
     match_category = title_cfg.get("match_category", False)
     category_names = category_names or {}
     excluded_category_ids = excluded_category_ids_for_kind(config, kind)
+    compiled_title = compile_filter(title_cfg.get("include", []), title_cfg.get("exclude", []))
 
     audio_cfg = config.get("audio_filters", {}).get(kind) if kind in ("vod", "series") else None
     on_unknown = config.get("audio_filters", {}).get("on_unknown", "keep")
+    compiled_audio = (
+        compile_filter(audio_cfg.get("include", []), audio_cfg.get("exclude", [])) if audio_cfg is not None else None
+    )
 
     audio_info = _load_audio_info(db, kind) if kind in ("vod", "series") else {}
 
@@ -93,12 +101,14 @@ def compute_visible_for_kind(
                 continue
 
             cat_name = category_names.get(str(category_id)) if category_id is not None else None
-            if not title_passes(name, cat_name, title_cfg, match_category):
+            if not title_passes(name, cat_name, title_cfg, match_category, compiled=compiled_title):
                 continue
 
             if audio_cfg is not None:
                 info = audio_info.get(item_id, ItemAudioInfo(match_texts=[], has_known_tracks=False))
-                if not audio_passes(info.match_texts, audio_cfg, on_unknown, info.has_known_tracks):
+                if not audio_passes(
+                    info.match_texts, audio_cfg, on_unknown, info.has_known_tracks, compiled=compiled_audio
+                ):
                     continue
 
         visible_ids.add(item_id)
@@ -114,6 +124,8 @@ def compute_hidden_breakdown_for_kind(
     config: dict,
     kind: str,
     category_names: dict[str, str] | None = None,
+    config_version: int | None = None,
+    data_version: int | None = None,
 ) -> dict[str, int]:
     """Counts, among currently non-visible items, how many were excluded by
     each filter stage -- category, title, or audio -- so the UI can explain
@@ -121,14 +133,30 @@ def compute_hidden_breakdown_for_kind(
     'hidden by category filter' number. An item is attributed to the first
     stage that would reject it, in the same order compute_visible_for_kind
     checks them (manual overrides bypass all of this, same as there).
+
+    Results are cached the same way as compute_visible_for_kind's -- this
+    does the same full-table scan, and without a cache it re-does that work
+    (including re-loading every audio track from the DB) on every dashboard
+    poll tick, which is expensive enough on a slow host to make /api/stats
+    itself feel hung. Pass config_version/data_version to enable caching;
+    omitted, it always recomputes (used by the one-off filter-preview path).
     """
+    if config_version is not None and data_version is not None:
+        cached = _hidden_breakdown_cache.get(kind)
+        if cached and cached[0] == config_version and cached[1] == data_version:
+            return cached[2]
+
     title_cfg = config["title_filters"][kind]
     match_category = title_cfg.get("match_category", False)
     category_names = category_names or {}
     excluded_category_ids = excluded_category_ids_for_kind(config, kind)
+    compiled_title = compile_filter(title_cfg.get("include", []), title_cfg.get("exclude", []))
 
     audio_cfg = config.get("audio_filters", {}).get(kind) if kind in ("vod", "series") else None
     on_unknown = config.get("audio_filters", {}).get("on_unknown", "keep")
+    compiled_audio = (
+        compile_filter(audio_cfg.get("include", []), audio_cfg.get("exclude", [])) if audio_cfg is not None else None
+    )
     audio_info = _load_audio_info(db, kind) if kind in ("vod", "series") else {}
 
     overridden_ids: set[str] = set(
@@ -154,15 +182,19 @@ def compute_hidden_breakdown_for_kind(
             continue
 
         cat_name = category_names.get(str(category_id)) if category_id is not None else None
-        if not title_passes(name, cat_name, title_cfg, match_category):
+        if not title_passes(name, cat_name, title_cfg, match_category, compiled=compiled_title):
             counts["title"] += 1
             continue
 
         if audio_cfg is not None:
             info = audio_info.get(item_id, ItemAudioInfo(match_texts=[], has_known_tracks=False))
-            if not audio_passes(info.match_texts, audio_cfg, on_unknown, info.has_known_tracks):
+            if not audio_passes(
+                info.match_texts, audio_cfg, on_unknown, info.has_known_tracks, compiled=compiled_audio
+            ):
                 counts["audio"] += 1
 
+    if config_version is not None and data_version is not None:
+        _hidden_breakdown_cache[kind] = (config_version, data_version, counts)
     return counts
 
 
