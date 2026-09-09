@@ -40,8 +40,8 @@ async def test_probe_ok_logs_title_and_languages(tmp_path):
     worker, db = make_worker(tmp_path)
     insert_item(db, "vod", "v1", "Die Hochzeits-Crasher")
 
-    async def fake_fetch(cfg, client, kind, item_id):
-        return [AudioTrack(track_idx=0, language="ger", title=None, codec="ac3", channels=6)], "ffprobe", False
+    async def fake_fetch(cfg, client, kind, item_id, allow_ffprobe):
+        return [AudioTrack(track_idx=0, language="ger", title=None, codec="ac3", channels=6)], "ffprobe", False, False
 
     worker._fetch_tracks = fake_fetch
     await worker._probe_item({}, client=None, item={"kind": "vod", "item_id": "v1"})
@@ -58,8 +58,8 @@ async def test_probe_no_audio_info_logs_source(tmp_path):
     worker, db = make_worker(tmp_path)
     insert_item(db, "series", "s1", "Some Show")
 
-    async def fake_fetch(cfg, client, kind, item_id):
-        return [], "api", False
+    async def fake_fetch(cfg, client, kind, item_id, allow_ffprobe):
+        return [], "api", False, False
 
     worker._fetch_tracks = fake_fetch
     await worker._probe_item({}, client=None, item={"kind": "series", "item_id": "s1"})
@@ -75,7 +75,7 @@ async def test_probe_error_logs_exception(tmp_path):
     worker, db = make_worker(tmp_path)
     insert_item(db, "vod", "v2", "Broken Title")
 
-    async def fake_fetch(cfg, client, kind, item_id):
+    async def fake_fetch(cfg, client, kind, item_id, allow_ffprobe):
         raise RuntimeError("boom")
 
     worker._fetch_tracks = fake_fetch

@@ -30,6 +30,8 @@
     --badge-pending-bg: #fff3cd; --badge-pending-fg: #7d5b00;
     --badge-error-bg: #ffd7d5; --badge-error-fg: #a40e26;
     --badge-unknown-bg: #e1e4e8; --badge-unknown-fg: #444;
+    --badge-deferred-bg: #dbeafe; --badge-deferred-fg: #1e40af;
+    --badge-skipped-bg: #f3f4f6; --badge-skipped-fg: #6b7280;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
@@ -54,6 +56,8 @@
       --badge-pending-bg: #3d3216; --badge-pending-fg: #f0c674;
       --badge-error-bg: #3d1418; --badge-error-fg: #ff9492;
       --badge-unknown-bg: #21262d; --badge-unknown-fg: #ababab;
+      --badge-deferred-bg: #1e3a5f; --badge-deferred-fg: #93c5fd;
+      --badge-skipped-bg: #21262d; --badge-skipped-fg: #8b949e;
     }
   }
   :root[data-theme="dark"] {
@@ -78,6 +82,8 @@
     --badge-pending-bg: #3d3216; --badge-pending-fg: #f0c674;
     --badge-error-bg: #3d1418; --badge-error-fg: #ff9492;
     --badge-unknown-bg: #21262d; --badge-unknown-fg: #ababab;
+    --badge-deferred-bg: #1e3a5f; --badge-deferred-fg: #93c5fd;
+    --badge-skipped-bg: #21262d; --badge-skipped-fg: #8b949e;
   }
 
   * { box-sizing: border-box; }
@@ -109,6 +115,13 @@
   .badge.pending { background: var(--badge-pending-bg); color: var(--badge-pending-fg); }
   .badge.error { background: var(--badge-error-bg); color: var(--badge-error-fg); }
   .badge.no_audio_info { background: var(--badge-unknown-bg); color: var(--badge-unknown-fg); }
+  .badge.deferred { background: var(--badge-deferred-bg); color: var(--badge-deferred-fg); }
+  .badge.skipped { background: var(--badge-skipped-bg); color: var(--badge-skipped-fg); }
+  .progress-cards { display: flex; flex-wrap: wrap; gap: 12px; }
+  .progress-card { flex: 1 1 220px; border: 1px solid var(--card-border); border-radius: 6px; padding: 10px 12px; }
+  .progress-card-title { font-weight: 600; text-transform: capitalize; margin-bottom: 6px; }
+  .progress-card-line { font-size: 13px; margin-bottom: 4px; }
+  .progress-card-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .status-line { font-size: 14px; margin-bottom: 8px; }
   .hint { color: var(--hint-fg); font-size: 12px; }
   .info-icon { color: var(--hint-fg); cursor: pointer; font-size: 13px; margin-left: 4px; }
@@ -299,7 +312,7 @@
       </div>
       <div class="col"><label>Search</label><input id="cat-q"></div>
       <div class="col"><label>Status</label>
-        <select id="cat-status"><option value="">any</option><option value="ok">ok</option><option value="pending">pending</option><option value="no_audio_info">no_audio_info</option><option value="error">error</option></select>
+        <select id="cat-status"><option value="">any</option><option value="ok">ok</option><option value="pending">pending</option><option value="deferred">deferred</option><option value="no_audio_info">no_audio_info</option><option value="error">error</option></select>
       </div>
     </div>
     <button id="btn-cat-search">Search</button>
@@ -441,15 +454,16 @@ function windowHoursPerDay(cfg) {
   return diff / 60;
 }
 
+const STATUS_COLUMNS = ['ok', 'pending', 'deferred', 'skipped', 'no_audio_info', 'error'];
+
 async function refreshStats() {
   const r = await fetch('/api/stats');
   const j = await r.json();
-  let html = `<div class="table-scroll"><table><tr><th>${t('common.type')}</th><th>${t('dash.total')}</th><th>${t('dash.visible')}</th><th>${t('dash.statusBreakdown')}</th></tr>`;
+  let html = '<div class="progress-cards">';
   for (const kind of ['live', 'vod', 'series']) {
     const s = j[kind];
-    const parts = Object.entries(s.by_status || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
     const hiddenCount = s.total - s.visible;
-    let visibleCell = `${s.visible}`;
+    let visibleLine = `${t('dash.visible')}: <b>${s.visible}</b>`;
     if (hiddenCount > 0) {
       const b = s.hidden_breakdown || {};
       const reasons = [];
@@ -457,11 +471,22 @@ async function refreshStats() {
       if (b.title) reasons.push(`${b.title} ${t('dash.byTitle')}`);
       if (b.audio) reasons.push(`${b.audio} ${t('dash.byAudio')}`);
       const detail = reasons.length ? reasons.join(', ') : `${hiddenCount} ${t('dash.hiddenGeneric')}`;
-      visibleCell = `${s.visible} ${infoIcon('visible-' + kind, detail)}`;
+      visibleLine += ` ${infoIcon('visible-' + kind, detail)}`;
     }
-    html += `<tr><td>${kind}</td><td>${s.total}</td><td>${visibleCell}</td><td>${parts}</td></tr>`;
+    const badges = STATUS_COLUMNS
+      .map(k => ({ k, v: (s.by_status || {})[k] }))
+      .filter(({ v }) => v)
+      .map(({ k, v }) => `<span class="badge ${k}">${k}: ${v}</span>`)
+      .join('');
+    html += `
+      <div class="progress-card">
+        <div class="progress-card-title">${kind}</div>
+        <div class="progress-card-line">${t('dash.total')}: <b>${s.total}</b></div>
+        <div class="progress-card-line">${visibleLine}</div>
+        ${badges ? `<div class="progress-card-badges">${badges}</div>` : ''}
+      </div>`;
   }
-  html += '</table></div>';
+  html += '</div>';
   $('stats').innerHTML = html;
 
   const eta = j.eta;

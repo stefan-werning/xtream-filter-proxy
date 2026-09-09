@@ -40,8 +40,8 @@ async def test_blocked_item_stays_pending_with_pushed_back_next_try(tmp_path):
     worker, db = make_worker(tmp_path)
     insert_item_and_probe(db, "vod", "v1", priority=20)
 
-    async def fake_fetch(cfg, client, kind, item_id):
-        return [], "api", True  # blocked
+    async def fake_fetch(cfg, client, kind, item_id, allow_ffprobe):
+        return [], "api", True, False  # blocked
 
     worker._fetch_tracks = fake_fetch
     blocked = await worker._probe_item({"crawler": {"slot_recheck_seconds": 30}}, client=None, item={"kind": "vod", "item_id": "v1"})
@@ -64,8 +64,8 @@ async def test_blocked_item_is_skipped_in_favor_of_another(tmp_path):
     insert_item_and_probe(db, "vod", "v1", priority=20)
     insert_item_and_probe(db, "vod", "v2", priority=20)
 
-    async def fake_fetch(cfg, client, kind, item_id):
-        return [], "api", True
+    async def fake_fetch(cfg, client, kind, item_id, allow_ffprobe):
+        return [], "api", True, False
 
     worker._fetch_tracks = fake_fetch
     cfg = {"crawler": {"slot_recheck_seconds": 30}}
@@ -101,8 +101,11 @@ async def test_api_only_kind_not_affected_by_slot_check(tmp_path):
         player_api = staticmethod(fake_player_api)
 
     cfg = {"crawler": {"slot_recheck_seconds": 30}, "ffprobe": {"enabled": True}}
-    tracks, source, blocked = await worker._fetch_tracks(cfg, FakeClient(), "series", "s1")
+    tracks, source, blocked, needs_ffprobe_retry = await worker._fetch_tracks(
+        cfg, FakeClient(), "series", "s1", allow_ffprobe=True
+    )
 
     assert blocked is False
+    assert needs_ffprobe_retry is False
     assert len(tracks) == 1
     assert slot_check_called is False

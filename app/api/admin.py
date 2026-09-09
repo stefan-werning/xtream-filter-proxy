@@ -237,7 +237,7 @@ def _estimate_probe_eta(db, sample_size: int = 50) -> dict:
 
     for kind in ("vod", "series"):
         pending = db.conn.execute(
-            "SELECT COUNT(*) c FROM probe_state WHERE kind = ? AND status = 'pending'", (kind,)
+            "SELECT COUNT(*) c FROM probe_state WHERE kind = ? AND status IN ('pending', 'deferred')", (kind,)
         ).fetchone()["c"]
         total_pending += pending
         rate = _estimate_probe_rate(db, kind, sample_size) if pending > 0 else None

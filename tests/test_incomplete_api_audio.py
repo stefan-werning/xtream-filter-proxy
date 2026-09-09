@@ -41,7 +41,7 @@ def test_tracks_satisfy_include_true_when_a_track_matches():
 
 
 @pytest.mark.asyncio
-async def test_fetch_tracks_falls_through_to_ffprobe_when_api_result_is_incomplete(tmp_path):
+async def test_fetch_tracks_falls_through_to_ffprobe_when_api_result_is_incomplete(tmp_path, monkeypatch):
     """A get_series_info that returns only one non-matching track (e.g. the
     provider's API only exposes a Portuguese dub while the real container
     also has German) must not be trusted blindly -- ffprobe should be tried
@@ -66,24 +66,55 @@ async def test_fetch_tracks_falls_through_to_ffprobe_when_api_result_is_incomple
         def build_redirect_url(self, path, rest):
             return f"http://x/{path}/u/p/{rest}"
 
+    async def fake_has_free_slot(cfg, client):
+        return True
+
     worker._extract_series_tracks = lambda payload: api_tracks
-    worker._has_free_slot = lambda cfg, client: _true()
+    worker._has_free_slot = fake_has_free_slot
 
     import app.crawler.worker as worker_module
 
     async def fake_run_ffprobe(url, binary, timeout_seconds):
         return {"streams": []}
 
-    worker_module.run_ffprobe = fake_run_ffprobe
-    worker_module.parse_audio_tracks = lambda result: ffprobe_tracks if result == {"streams": []} else []
-    worker_module.ffprobe_available = lambda binary: True
+    monkeypatch.setattr(worker_module, "run_ffprobe", fake_run_ffprobe)
+    monkeypatch.setattr(worker_module, "parse_audio_tracks", lambda result: ffprobe_tracks if result == {"streams": []} else [])
+    monkeypatch.setattr(worker_module, "ffprobe_available", lambda binary: True)
 
-    tracks, source, blocked = await worker._fetch_tracks(cfg, FakeClient(), "series", "50146")
+    tracks, source, blocked, needs_ffprobe_retry = await worker._fetch_tracks(
+        cfg, FakeClient(), "series", "50146", allow_ffprobe=True
+    )
 
     assert blocked is False
+    assert needs_ffprobe_retry is False
     assert source == "ffprobe"
     assert tracks == ffprobe_tracks
 
 
-async def _true():
-    return True
+@pytest.mark.asyncio
+async def test_fetch_tracks_defers_instead_of_probing_when_ffprobe_not_yet_allowed(tmp_path):
+    """On a fresh item's first attempt (allow_ffprobe=False), an API result
+    that doesn't satisfy the language filter must be deferred rather than
+    immediately falling through to ffprobe -- so a slow ffprobe-needing
+    title doesn't make a fast, API-only title wait behind it in the queue.
+    """
+    worker, db = make_worker(tmp_path)
+    cfg = worker.config_mgr.get()
+    cfg["ffprobe"]["enabled"] = True
+
+    api_tracks = [AudioTrack(track_idx=0, language="por", title="Brazilian", codec="aac", channels=6)]
+
+    async def fake_player_api(params):
+        return {"episodes": {"1": [{"id": "999", "container_extension": "mkv", "info": {}}]}}
+
+    class FakeClient:
+        player_api = staticmethod(fake_player_api)
+
+    worker._extract_series_tracks = lambda payload: api_tracks
+
+    tracks, source, blocked, needs_ffprobe_retry = await worker._fetch_tracks(
+        cfg, FakeClient(), "series", "50146", allow_ffprobe=False
+    )
+
+    assert needs_ffprobe_retry is True
+    assert blocked is False

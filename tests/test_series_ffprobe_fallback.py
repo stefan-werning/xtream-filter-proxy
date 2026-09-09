@@ -59,3 +59,39 @@ def test_guess_stream_url_for_series_returns_none_without_episodes(tmp_path):
     assert worker._guess_stream_url(worker.config_mgr.get(), client, "series", "50146", {}) is None
     assert worker._guess_stream_url(worker.config_mgr.get(), client, "series", "50146", None) is None
     assert worker._guess_stream_url(worker.config_mgr.get(), client, "series", "50146", {"episodes": {}}) is None
+
+
+def test_extract_series_tracks_handles_list_of_lists_episodes_shape(tmp_path):
+    """Some panels return 'episodes' as a plain list of per-season episode
+    lists ([[...], [...]]) instead of a dict keyed by season number
+    ({"1": [...]}) -- both shapes must be parsed the same way.
+    """
+    worker, db = make_worker(tmp_path)
+    payload = {
+        "episodes": [
+            [{"id": "1", "info": {"audio": {"codec_name": "aac", "channels": 2, "tags": {"language": "eng"}}}}],
+            [{"id": "2", "info": {"audio": {"codec_name": "aac", "channels": 6, "tags": {"language": "ger"}}}}],
+        ]
+    }
+    tracks = worker._extract_series_tracks(payload)
+    assert len(tracks) == 1
+    assert tracks[0].language == "eng"
+
+
+def test_first_episode_handles_list_of_lists_episodes_shape(tmp_path):
+    worker, db = make_worker(tmp_path)
+    payload = {"episodes": [[{"id": "1"}], [{"id": "2"}]]}
+    ep = worker._first_episode(payload)
+    assert ep == {"id": "1"}
+
+
+def test_extract_series_tracks_still_handles_dict_episodes_shape(tmp_path):
+    worker, db = make_worker(tmp_path)
+    payload = {
+        "episodes": {
+            "1": [{"id": "1", "info": {"audio": {"codec_name": "aac", "channels": 2, "tags": {"language": "fre"}}}}],
+        }
+    }
+    tracks = worker._extract_series_tracks(payload)
+    assert len(tracks) == 1
+    assert tracks[0].language == "fre"

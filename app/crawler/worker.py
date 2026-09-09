@@ -203,7 +203,12 @@ class CrawlerWorker:
     def _next_pending_item(self, cfg: dict) -> dict | None:
         """Alternates between vod and series (round-robin) so neither kind
         has to fully drain before the other gets a turn; within a kind,
-        items are still taken in priority order (new sync arrivals first).
+        items are still taken in priority order (new sync arrivals first),
+        with 'pending' items always offered before 'deferred' ones -- a
+        deferred item already had its first (API-only) attempt and is
+        waiting for a slot to open up for its ffprobe retry, so a fresh
+        pending item (which might resolve via the API alone, instantly)
+        always gets first refusal.
         """
         now = int(time.time())
         candidates: dict[str, str] = {}
@@ -211,9 +216,10 @@ class CrawlerWorker:
             cur = self.db.conn.execute(
                 "SELECT ps.item_id FROM probe_state ps "
                 "JOIN items i ON i.kind = ps.kind AND i.item_id = ps.item_id "
-                "WHERE ps.kind = ? AND ps.status = 'pending' AND (ps.next_try IS NULL OR ps.next_try <= ?) "
+                "WHERE ps.kind = ? AND ps.status IN ('pending', 'deferred') "
+                "AND (ps.next_try IS NULL OR ps.next_try <= ?) "
                 "AND i.removed_at IS NULL "
-                "ORDER BY ps.priority DESC, ps.next_try ASC LIMIT 1",
+                "ORDER BY (ps.status = 'pending') DESC, ps.priority DESC, ps.next_try ASC LIMIT 1",
                 (kind, now),
             )
             row = cur.fetchone()
@@ -236,12 +242,45 @@ class CrawlerWorker:
         now = int(time.time())
         name = self._item_name(kind, item_id)
 
+        # Give a fresh item one chance to resolve via the API alone before
+        # ever considering ffprobe for it. This keeps a fast, API-only
+        # series (which for some providers is the common case once you've
+        # narrowed categories down to ones mostly in your target language)
+        # from queuing up behind a slower title that needs the ffprobe/
+        # slot-check path -- deferred items simply get a lower priority and
+        # come up again once nothing fresher is pending.
+        row = self.db.conn.execute(
+            "SELECT status FROM probe_state WHERE kind = ? AND item_id = ?", (kind, item_id)
+        ).fetchone()
+        allow_ffprobe = bool(row and row["status"] == "deferred")
+
         try:
-            tracks, source, blocked = await self._fetch_tracks(cfg, client, kind, item_id)
+            tracks, source, blocked, needs_ffprobe_retry = await self._fetch_tracks(
+                cfg, client, kind, item_id, allow_ffprobe
+            )
         except Exception as e:
             logger.exception("probe failed for %s:%s", kind, item_id)
             self._mark_probe(kind, item_id, "error", None, str(e))
             self.db.log("info", f"probe {kind}:{item_id} '{name}' -> error: {e}")
+            invalidate_filter_cache()
+            data_version.bump()
+            return False
+
+        if needs_ffprobe_retry:
+            # First attempt only checked the API and it wasn't good enough.
+            # Marked as its own status (not just a lower-priority 'pending')
+            # so the dashboard can show it separately -- otherwise a busy
+            # crawler doing lots of these looks completely idle, since
+            # 'pending' never visibly moves. Still picked ahead of other
+            # deferred items by priority/next_try, but always after fresh
+            # 'pending' ones (which might resolve via the API alone).
+            with self.db.cursor() as cur:
+                cur.execute(
+                    "UPDATE probe_state SET status = 'deferred', attempts = attempts + 1, last_try = ? "
+                    "WHERE kind = ? AND item_id = ?",
+                    (now, kind, item_id),
+                )
+            self.db.log("info", f"probe {kind}:{item_id} '{name}' -> deferred (api result needs ffprobe confirmation)")
             invalidate_filter_cache()
             data_version.bump()
             return False
@@ -287,13 +326,20 @@ class CrawlerWorker:
         ).fetchone()
         return row["name"] if row else item_id
 
-    async def _fetch_tracks(self, cfg: dict, client: UpstreamClient, kind: str, item_id: str):
+    async def _fetch_tracks(self, cfg: dict, client: UpstreamClient, kind: str, item_id: str, allow_ffprobe: bool):
         """Raises ffprobe.FfprobeFailedError (uncaught here, on purpose) if
         ffprobe was attempted but couldn't complete -- _probe_item's generic
         except-block turns that into an 'error' status with backoff, so a
         transient failure (e.g. the provider rejecting the connection
         because the account's only slot was briefly busy) gets retried
         instead of being recorded as a permanent 'no_audio_info'.
+
+        Returns (tracks, source, blocked, needs_ffprobe_retry). When
+        allow_ffprobe is False and the API result isn't good enough,
+        needs_ffprobe_retry is True and ffprobe is not attempted at all --
+        the caller defers the item to a lower priority instead, so items
+        that need the slower ffprobe path don't make faster, API-only
+        items wait behind them in the queue.
         """
         action = INFO_ACTION[kind]
         id_param = ID_PARAM[kind]
@@ -323,10 +369,17 @@ class CrawlerWorker:
         ffprobe_needed = not tracks or not self._tracks_satisfy_include(tracks, cfg, kind)
 
         if tracks and not ffprobe_needed:
-            return tracks, "api", False
+            return tracks, "api", False, False
+
+        ffprobe_configured = cfg.get("ffprobe", {}).get("enabled", False) and ffprobe_available(
+            cfg["ffprobe"].get("binary", "ffprobe")
+        )
+
+        if ffprobe_needed and ffprobe_configured and not allow_ffprobe:
+            return tracks, "api", False, True
 
         last_attempted_source = "api"
-        if ffprobe_needed and cfg.get("ffprobe", {}).get("enabled", False) and ffprobe_available(cfg["ffprobe"].get("binary", "ffprobe")):
+        if ffprobe_needed and ffprobe_configured:
             stream_url = self._guess_stream_url(cfg, client, kind, item_id, payload)
             if stream_url:
                 # ffprobe opens a real stream connection -- only attempt it
@@ -336,7 +389,7 @@ class CrawlerWorker:
                 # as no_audio_info/using an incomplete API result just
                 # because a slot wasn't available.
                 if not await self._has_free_slot(cfg, client):
-                    return [], "api", True
+                    return [], "api", True, False
                 last_attempted_source = "ffprobe"
                 result = await run_ffprobe(
                     stream_url,
@@ -349,11 +402,11 @@ class CrawlerWorker:
                     # partial API result rather than being merged with it --
                     # merging could double-count the same track under two
                     # slightly different tag spellings.
-                    return ffprobe_tracks, "ffprobe", False
+                    return ffprobe_tracks, "ffprobe", False, False
 
         if tracks:
-            return tracks, "api", False
-        return [], last_attempted_source, False
+            return tracks, "api", False, False
+        return [], last_attempted_source, False, False
 
     def _tracks_satisfy_include(self, tracks: list, cfg: dict, kind: str) -> bool:
         """True if at least one track matches the configured audio include
@@ -371,15 +424,13 @@ class CrawlerWorker:
         """Series info returns episodes grouped by season; probe the first
         episode per season with usable audio info, result applies to the
         whole series.
+
+        Panels disagree on the shape of 'episodes': usually a dict keyed by
+        season number ({"1": [...], "2": [...]}), but some return a plain
+        list of per-season episode lists instead ([[...], [...]]). Both are
+        handled the same way once normalized to a list of episode lists.
         """
-        if not isinstance(payload, dict):
-            return []
-        episodes = payload.get("episodes")
-        if not isinstance(episodes, dict):
-            return []
-        for _season, ep_list in episodes.items():
-            if not isinstance(ep_list, list):
-                continue
+        for ep_list in self._episode_lists(payload):
             for ep in ep_list:
                 if not isinstance(ep, dict):
                     continue
@@ -387,6 +438,19 @@ class CrawlerWorker:
                 tracks = parse_audio_tracks(info)
                 if tracks:
                     return tracks
+        return []
+
+    def _episode_lists(self, payload) -> list:
+        """Normalizes payload['episodes'] (dict-of-lists or list-of-lists)
+        into a flat list of per-season episode lists.
+        """
+        if not isinstance(payload, dict):
+            return []
+        episodes = payload.get("episodes")
+        if isinstance(episodes, dict):
+            return [v for v in episodes.values() if isinstance(v, list)]
+        if isinstance(episodes, list):
+            return [v for v in episodes if isinstance(v, list)]
         return []
 
     def _guess_stream_url(self, cfg, client: UpstreamClient, kind: str, item_id: str, payload) -> str | None:
@@ -411,14 +475,7 @@ class CrawlerWorker:
         return None
 
     def _first_episode(self, payload) -> dict | None:
-        if not isinstance(payload, dict):
-            return None
-        episodes = payload.get("episodes")
-        if not isinstance(episodes, dict):
-            return None
-        for _season, ep_list in episodes.items():
-            if not isinstance(ep_list, list):
-                continue
+        for ep_list in self._episode_lists(payload):
             for ep in ep_list:
                 if isinstance(ep, dict):
                     return ep

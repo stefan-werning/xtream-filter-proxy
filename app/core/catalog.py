@@ -190,7 +190,7 @@ def sync_probe_state_with_category_filters(db: Database, config: dict) -> None:
                 # crawler still probes them for real audio data.
                 cur.execute(
                     f"UPDATE probe_state SET status = 'skipped' "
-                    f"WHERE kind = ? AND status = 'pending' AND item_id IN ("
+                    f"WHERE kind = ? AND status IN ('pending', 'deferred') AND item_id IN ("
                     f"SELECT item_id FROM items WHERE kind = ? AND category_id IN ({placeholders})"
                     f") AND item_id NOT IN (SELECT item_id FROM manual_overrides WHERE kind = ?)",
                     (kind, kind, *excluded, kind),
