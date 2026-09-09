@@ -1,0 +1,12 @@
+{
+  "info": {
+    "streams": [
+      { "index": 0, "codec_type": "video", "codec_name": "h264" },
+      { "index": 1, "codec_type": "audio", "codec_name": "eac3", "channels": 6,
+        "tags": { "language": "deu", "title": "Deutsch" } },
+      { "index": 2, "codec_type": "audio", "codec_name": "aac", "channels": 2,
+        "tags": { "language": "eng" } }
+    ]
+  },
+  "movie_data": { "stream_id": 103, "container_extension": "mkv" }
+}

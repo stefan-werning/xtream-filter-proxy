@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/
+config.yaml
+conf.txt
+*.db
+*.db-wal
+*.db-shm
+claude.sh

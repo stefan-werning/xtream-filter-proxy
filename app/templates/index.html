@@ -1,0 +1,740 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Xtream Filter Proxy</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --fg: #1b1f24;
+    --header-bg: #1b1f24;
+    --header-fg: #fff;
+    --nav-fg: #cfd6de;
+    --nav-active-bg: #2d333b;
+    --card-bg: #fff;
+    --card-border: #e1e4e8;
+    --label-fg: #57606a;
+    --input-border: #d0d7de;
+    --input-bg: #fff;
+    --input-fg: #1b1f24;
+    --hint-fg: #57606a;
+    --row-border: #eee;
+    --btn-bg: #1f6feb;
+    --btn-fg: #fff;
+    --btn-secondary-bg: #57606a;
+    --btn-danger-bg: #cf222e;
+    --log-bg: #0d1117;
+    --log-fg: #c9d1d9;
+    --badge-ok-bg: #d4f8d4; --badge-ok-fg: #116329;
+    --badge-pending-bg: #fff3cd; --badge-pending-fg: #7d5b00;
+    --badge-error-bg: #ffd7d5; --badge-error-fg: #a40e26;
+    --badge-unknown-bg: #e1e4e8; --badge-unknown-fg: #444;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1117;
+      --fg: #c9d1d9;
+      --header-bg: #010409;
+      --header-fg: #e6edf3;
+      --nav-fg: #8b949e;
+      --nav-active-bg: #21262d;
+      --card-bg: #161b22;
+      --card-border: #30363d;
+      --label-fg: #8b949e;
+      --input-border: #30363d;
+      --input-bg: #0d1117;
+      --input-fg: #c9d1d9;
+      --hint-fg: #8b949e;
+      --row-border: #21262d;
+      --btn-secondary-bg: #30363d;
+      --log-bg: #010409;
+      --log-fg: #c9d1d9;
+      --badge-ok-bg: #113828; --badge-ok-fg: #7ee2a8;
+      --badge-pending-bg: #3d3216; --badge-pending-fg: #f0c674;
+      --badge-error-bg: #3d1418; --badge-error-fg: #ff9492;
+      --badge-unknown-bg: #21262d; --badge-unknown-fg: #ababab;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117;
+    --fg: #c9d1d9;
+    --header-bg: #010409;
+    --header-fg: #e6edf3;
+    --nav-fg: #8b949e;
+    --nav-active-bg: #21262d;
+    --card-bg: #161b22;
+    --card-border: #30363d;
+    --label-fg: #8b949e;
+    --input-border: #30363d;
+    --input-bg: #0d1117;
+    --input-fg: #c9d1d9;
+    --hint-fg: #8b949e;
+    --row-border: #21262d;
+    --btn-secondary-bg: #30363d;
+    --log-bg: #010409;
+    --log-fg: #c9d1d9;
+    --badge-ok-bg: #113828; --badge-ok-fg: #7ee2a8;
+    --badge-pending-bg: #3d3216; --badge-pending-fg: #f0c674;
+    --badge-error-bg: #3d1418; --badge-error-fg: #ff9492;
+    --badge-unknown-bg: #21262d; --badge-unknown-fg: #ababab;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { font-family: system-ui, sans-serif; margin: 0; background: var(--bg); color: var(--fg); }
+  header { background: var(--header-bg); color: var(--header-fg); padding: 10px 16px; }
+  header h1 { font-size: 16px; margin: 0 0 8px 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  #theme-toggle { background: transparent; border: 1px solid var(--nav-fg); color: var(--header-fg); padding: 4px 8px; min-height: auto; font-size: 12px; margin: 0; width: auto; }
+  .header-actions { display: flex; gap: 6px; align-items: center; }
+  nav { display: flex; gap: 4px; overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 2px; }
+  nav a { color: var(--nav-fg); text-decoration: none; cursor: pointer; padding: 8px 10px; border-radius: 4px; white-space: nowrap; flex: 0 0 auto; }
+  nav a.active { color: var(--header-fg); font-weight: 600; background: var(--nav-active-bg); }
+  main { padding: 12px; max-width: 1100px; margin: 0 auto; }
+  .card { background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 14px; margin-bottom: 14px; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .col { flex: 1 1 200px; min-width: 0; }
+  label { display: block; font-size: 12px; color: var(--label-fg); margin-bottom: 4px; margin-top: 8px; }
+  input, textarea, select { width: 100%; box-sizing: border-box; padding: 8px; border: 1px solid var(--input-border); border-radius: 4px; font-family: inherit; font-size: 16px; background: var(--input-bg); color: var(--input-fg); }
+  textarea { min-height: 60px; font-family: monospace; font-size: 13px; }
+  button { background: var(--btn-bg); color: var(--btn-fg); border: none; padding: 10px 14px; border-radius: 4px; cursor: pointer; font-size: 14px; margin: 0 8px 8px 0; min-height: 40px; }
+  button.secondary { background: var(--btn-secondary-bg); }
+  button.danger { background: var(--btn-danger-bg); }
+  button:disabled { opacity: 0.6; cursor: not-allowed; }
+  .table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 480px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--row-border); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .badge.ok { background: var(--badge-ok-bg); color: var(--badge-ok-fg); }
+  .badge.pending { background: var(--badge-pending-bg); color: var(--badge-pending-fg); }
+  .badge.error { background: var(--badge-error-bg); color: var(--badge-error-fg); }
+  .badge.no_audio_info { background: var(--badge-unknown-bg); color: var(--badge-unknown-fg); }
+  .status-line { font-size: 14px; margin-bottom: 8px; }
+  .hint { color: var(--hint-fg); font-size: 12px; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+  pre.log { max-height: 300px; overflow: auto; background: var(--log-bg); color: var(--log-fg); padding: 10px; border-radius: 4px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+  details.del-category { border: 1px solid var(--card-border); border-radius: 4px; margin-bottom: 6px; padding: 8px 10px; }
+  details.del-category summary { cursor: pointer; font-weight: 600; }
+  details.del-category .del-items { margin-top: 8px; max-height: 300px; overflow-y: auto; }
+  details.del-category .del-items ul { margin: 0; padding-left: 18px; font-size: 13px; }
+
+  @media (max-width: 640px) {
+    main { padding: 8px; }
+    .card { padding: 12px; border-radius: 4px; }
+    .col { flex: 1 1 100%; }
+    button { width: 100%; margin-right: 0; }
+    header h1 { font-size: 15px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Xtream Filter Proxy
+    <span class="header-actions">
+      <button id="theme-toggle" title="Toggle theme">🌓</button>
+    </span>
+  </h1>
+  <nav>
+    <a data-tab="dashboard" class="active">Dashboard</a>
+    <a data-tab="settings">Settings</a>
+    <a data-tab="categories">Categories</a>
+    <a data-tab="preview">Filter Preview</a>
+    <a data-tab="catalog">Catalog</a>
+    <a data-tab="delivered">Delivered List</a>
+  </nav>
+</header>
+<main>
+
+<section id="dashboard" class="tab active">
+  <div class="card">
+    <div class="status-line"><span>Crawler status:</span> <b id="crawler-status">-</b> <span id="current-item" class="hint"></span></div>
+    <button id="btn-pause">Pause</button>
+    <button id="btn-resume" class="secondary">Resume</button>
+    <button id="btn-sync" class="secondary">Sync now</button>
+    <button id="btn-reset" class="danger">Reset all probes</button>
+  </div>
+  <div class="card">
+    <h3>Progress</h3>
+    <div id="stats"></div>
+    <p id="eta-line" class="hint"></p>
+  </div>
+  <div class="card">
+    <h3>Recent log</h3>
+    <pre class="log" id="log"></pre>
+  </div>
+</section>
+
+<section id="settings" class="tab">
+  <div class="card">
+    <h3>Upstream</h3>
+    <div class="row">
+      <div class="col"><label>Base URL</label><input id="cfg-base-url"></div>
+      <div class="col"><label>Username</label><input id="cfg-username"></div>
+      <div class="col"><label>Password</label><input id="cfg-password" type="password" placeholder="leave blank to keep"></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Crawler</h3>
+    <div class="row">
+      <div class="col"><label>request_delay_seconds</label><input id="cfg-delay"></div>
+      <div class="col"><label>reserve_slots</label><input id="cfg-reserve"></div>
+      <div class="col"><label>sync_interval_minutes</label><input id="cfg-sync-interval"></div>
+      <div class="col"><label>ffprobe enabled</label>
+        <select id="cfg-ffprobe"><option value="false">off</option><option value="true">on</option></select>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Crawl schedule</h3>
+    <p class="hint">Limits when the crawler is allowed to probe titles (e.g. only at night, when you're not streaming). Applies to one time window across the selected days.</p>
+    <div class="row">
+      <div class="col"><label>Schedule enabled</label>
+        <select id="cs-enabled"><option value="true">on (only crawl within window)</option><option value="false">off (crawl anytime)</option></select>
+      </div>
+      <div class="col"><label>Start</label><input id="cs-start" type="time"></div>
+      <div class="col"><label>End</label><input id="cs-end" type="time"></div>
+      <div class="col"><label>Timezone</label><input id="cs-timezone" placeholder="Europe/Berlin"></div>
+    </div>
+    <label>Days</label>
+    <div class="row" id="cs-days" style="gap: 4px 14px;">
+      <label style="display:flex; align-items:center; gap:4px; width:auto; margin:0;"><input type="checkbox" value="mon" style="width:auto;"> <span>Mon</span></label>
+      <label style="display:flex; align-items:center; gap:4px; width:auto; margin:0;"><input type="checkbox" value="tue" style="width:auto;"> <span>Tue</span></label>
+      <label style="display:flex; align-items:center; gap:4px; width:auto; margin:0;"><input type="checkbox" value="wed" style="width:auto;"> <span>Wed</span></label>
+      <label style="display:flex; align-items:center; gap:4px; width:auto; margin:0;"><input type="checkbox" value="thu" style="width:auto;"> <span>Thu</span></label>
+      <label style="display:flex; align-items:center; gap:4px; width:auto; margin:0;"><input type="checkbox" value="fri" style="width:auto;"> <span>Fri</span></label>
+      <label style="display:flex; align-items:center; gap:4px; width:auto; margin:0;"><input type="checkbox" value="sat" style="width:auto;"> <span>Sat</span></label>
+      <label style="display:flex; align-items:center; gap:4px; width:auto; margin:0;"><input type="checkbox" value="sun" style="width:auto;"> <span>Sun</span></label>
+    </div>
+    <p class="hint">Overnight windows (e.g. 23:00 → 03:00) are supported.</p>
+  </div>
+  <div class="card">
+    <h3>Title filters</h3>
+    <p class="hint">One regex per line. Case-sensitive — use (?i) yourself.</p>
+    <div class="row">
+      <div class="col"><label>Live include</label><textarea id="tf-live-include"></textarea>
+        <label>Live exclude</label><textarea id="tf-live-exclude"></textarea></div>
+      <div class="col"><label>VOD include</label><textarea id="tf-vod-include"></textarea>
+        <label>VOD exclude</label><textarea id="tf-vod-exclude"></textarea></div>
+      <div class="col"><label>Series include</label><textarea id="tf-series-include"></textarea>
+        <label>Series exclude</label><textarea id="tf-series-exclude"></textarea></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Audio filters (VOD &amp; Series only)</h3>
+    <div class="row">
+      <div class="col"><label>VOD include</label><textarea id="af-vod-include"></textarea>
+        <label>VOD exclude</label><textarea id="af-vod-exclude"></textarea></div>
+      <div class="col"><label>Series include</label><textarea id="af-series-include"></textarea>
+        <label>Series exclude</label><textarea id="af-series-exclude"></textarea></div>
+      <div class="col"><label>Unprobed titles (on_unknown)</label>
+        <select id="af-on-unknown">
+          <option value="keep">Show them (keep) — until the crawler checks their audio</option>
+          <option value="drop">Hide them (drop) — only show titles with a confirmed matching track</option>
+        </select></div>
+    </div>
+  </div>
+  <button id="btn-save-settings">Save settings</button>
+  <span id="settings-msg" class="hint"></span>
+  <p class="hint">After changing filters, refresh the playlist inside IPTV Smarters — it caches the catalog locally.</p>
+</section>
+
+<section id="categories" class="tab">
+  <div class="card">
+    <p class="hint">Uncheck a category to hide all its titles from the filtered lists — and, for VOD/Series, skip probing those titles entirely so the crawler focuses on what you actually want to see.</p>
+    <div class="row">
+      <div class="col"><label>Type</label>
+        <select id="cats-kind"><option value="vod">VOD</option><option value="series">Series</option><option value="live">Live</option></select>
+      </div>
+      <div class="col"><label>Search</label><input id="cats-q" placeholder="Filter by name..."></div>
+    </div>
+    <div class="row">
+      <button id="btn-cats-select-all" class="secondary">Select all</button>
+      <button id="btn-cats-select-none" class="secondary">Select none</button>
+      <button id="btn-cats-save">Save selection</button>
+      <span id="cats-msg" class="hint"></span>
+    </div>
+    <div class="table-scroll">
+      <table id="cats-table">
+        <thead><tr><th></th><th>Category</th><th>Items</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="preview" class="tab">
+  <div class="card">
+    <div class="row">
+      <div class="col">
+        <label>Type</label>
+        <select id="pv-kind"><option value="vod">VOD</option><option value="series">Series</option><option value="live">Live</option></select>
+      </div>
+    </div>
+    <div class="row">
+      <div class="col"><label>Title include</label><textarea id="pv-title-include"></textarea></div>
+      <div class="col"><label>Title exclude</label><textarea id="pv-title-exclude"></textarea></div>
+    </div>
+    <div class="row">
+      <div class="col"><label>Audio include</label><textarea id="pv-audio-include"></textarea></div>
+      <div class="col"><label>Audio exclude</label><textarea id="pv-audio-exclude"></textarea></div>
+    </div>
+    <button id="btn-preview">Preview</button>
+    <div id="pv-result"></div>
+  </div>
+</section>
+
+<section id="catalog" class="tab">
+  <div class="card">
+    <div class="row">
+      <div class="col"><label>Type</label>
+        <select id="cat-kind"><option value="vod">VOD</option><option value="series">Series</option><option value="live">Live</option></select>
+      </div>
+      <div class="col"><label>Search</label><input id="cat-q"></div>
+      <div class="col"><label>Status</label>
+        <select id="cat-status"><option value="">any</option><option value="ok">ok</option><option value="pending">pending</option><option value="no_audio_info">no_audio_info</option><option value="error">error</option></select>
+      </div>
+    </div>
+    <button id="btn-cat-search">Search</button>
+    <div class="table-scroll">
+      <table id="cat-table"><thead><tr><th>Name</th><th>Status</th><th>Audio</th><th></th></tr></thead><tbody></tbody></table>
+    </div>
+    <div class="row" style="align-items:center; margin-top:8px;">
+      <button id="btn-cat-prev" class="secondary">← Prev</button>
+      <span id="cat-page-info" class="hint" style="align-self:center;"></span>
+      <button id="btn-cat-next" class="secondary">Next →</button>
+    </div>
+  </div>
+</section>
+
+<section id="delivered" class="tab">
+  <div class="card">
+    <p class="hint">This is exactly what IPTV Smarters receives right now for the selected type — items in excluded categories are already gone; title/audio filters have been applied.</p>
+    <div class="row">
+      <div class="col"><label>Type</label>
+        <select id="del-kind"><option value="vod">VOD</option><option value="series">Series</option><option value="live">Live</option></select>
+      </div>
+    </div>
+    <p><b id="del-total-visible">-</b> items across <b id="del-category-count">-</b> categories.</p>
+    <div id="del-categories"></div>
+  </div>
+</section>
+
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let cfgVersion = null;
+let lastLoadedConfig = null;
+
+const I18N = {
+  en: {
+    'nav.dashboard': 'Dashboard', 'nav.settings': 'Settings', 'nav.categories': 'Categories',
+    'nav.preview': 'Filter Preview', 'nav.catalog': 'Catalog',
+    'dash.status': 'Crawler status:', 'dash.pause': 'Pause', 'dash.resume': 'Resume',
+    'dash.syncNow': 'Sync now', 'dash.resetProbes': 'Reset all probes', 'dash.progress': 'Progress',
+    'dash.recentLog': 'Recent log', 'dash.total': 'Total', 'dash.visible': 'Visible',
+    'dash.statusBreakdown': 'Status breakdown', 'dash.hiddenByCategory': 'hidden by category filter',
+    'settings.upstream': 'Upstream', 'settings.baseUrl': 'Base URL', 'settings.username': 'Username',
+    'settings.password': 'Password', 'settings.passwordPlaceholder': 'leave blank to keep',
+    'settings.crawler': 'Crawler', 'settings.ffprobeEnabled': 'ffprobe enabled',
+    'settings.crawlSchedule': 'Crawl schedule',
+    'settings.crawlScheduleHint': "Limits when the crawler is allowed to probe titles (e.g. only at night, when you're not streaming). Applies to one time window across the selected days.",
+    'settings.scheduleEnabled': 'Schedule enabled', 'settings.scheduleOn': 'on (only crawl within window)',
+    'settings.scheduleOff': 'off (crawl anytime)', 'settings.start': 'Start', 'settings.end': 'End',
+    'settings.timezone': 'Timezone', 'settings.days': 'Days',
+    'settings.overnightHint': 'Overnight windows (e.g. 23:00 → 03:00) are supported.',
+    'settings.titleFilters': 'Title filters', 'settings.regexHint': 'One regex per line. Case-sensitive — use (?i) yourself.',
+    'settings.liveInclude': 'Live include', 'settings.liveExclude': 'Live exclude',
+    'settings.vodInclude': 'VOD include', 'settings.vodExclude': 'VOD exclude',
+    'settings.seriesInclude': 'Series include', 'settings.seriesExclude': 'Series exclude',
+    'settings.audioFilters': 'Audio filters (VOD & Series only)', 'settings.keep': 'keep', 'settings.drop': 'drop',
+    'settings.save': 'Save settings',
+    'settings.refreshHint': "After changing filters, refresh the playlist inside IPTV Smarters — it caches the catalog locally.",
+    'cats.hint': "Uncheck a category to hide all its titles from the filtered lists — and, for VOD/Series, skip probing those titles entirely so the crawler focuses on what you actually want to see.",
+    'cats.searchPlaceholder': 'Filter by name...', 'cats.selectAll': 'Select all', 'cats.selectNone': 'Select none',
+    'cats.saveSelection': 'Save selection', 'cats.category': 'Category', 'cats.items': 'Items',
+    'preview.titleInclude': 'Title include', 'preview.titleExclude': 'Title exclude',
+    'preview.audioInclude': 'Audio include', 'preview.audioExclude': 'Audio exclude', 'preview.preview': 'Preview',
+    'catalog.status': 'Status', 'catalog.any': 'any', 'catalog.name': 'Name', 'catalog.audio': 'Audio',
+    'catalog.prev': '← Prev', 'catalog.next': 'Next →',
+    'common.type': 'Type', 'common.search': 'Search', 'common.series': 'Series', 'common.live': 'Live',
+    'common.off': 'off', 'common.on': 'on',
+    'days.mon': 'Mon', 'days.tue': 'Tue', 'days.wed': 'Wed', 'days.thu': 'Thu', 'days.fri': 'Fri', 'days.sat': 'Sat', 'days.sun': 'Sun',
+    'js.reprobe': 'Re-probe', 'js.removed': '(removed)', 'js.page': 'Page', 'js.of': 'of', 'js.items': 'items',
+    'js.saved': 'Saved.', 'js.conflictSettings': 'Conflict: settings were changed elsewhere. Reloading current values — please re-apply your edits.',
+    'js.conflictCats': 'Conflict: settings changed elsewhere, please retry.', 'js.error': 'Error:',
+    'js.syncing': 'Syncing…', 'js.confirmReset': 'Reset all probe states?', 'js.pass': 'pass',
+    'js.passedSample': 'Passed (sample)', 'js.filteredSample': 'Filtered out (sample)',
+    'status.running': 'running', 'status.paused': 'paused', 'status.outside_window': 'outside window',
+    'status.waiting_for_slot': 'waiting for connection slot', 'status.idle': 'idle',
+  },
+};
+
+function t(key) {
+  return (I18N.en[key]) || key;
+}
+
+(function initTheme() {
+  try {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'light' || saved === 'dark') {
+      document.documentElement.setAttribute('data-theme', saved);
+    }
+  } catch (e) {}
+})();
+
+$('theme-toggle').onclick = () => {
+  const root = document.documentElement;
+  const current = root.getAttribute('data-theme')
+    || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+  const next = current === 'dark' ? 'light' : 'dark';
+  root.setAttribute('data-theme', next);
+  try { localStorage.setItem('theme', next); } catch (e) {}
+};
+
+document.querySelectorAll('nav a').forEach(a => a.addEventListener('click', () => {
+  document.querySelectorAll('nav a').forEach(x => x.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+  a.classList.add('active');
+  $(a.dataset.tab).classList.add('active');
+}));
+
+function linesToArr(s) { return s.split('\n').map(x => x.trim()).filter(Boolean); }
+function arrToLines(a) { return (a || []).join('\n'); }
+
+async function refreshStatus() {
+  const r = await fetch('/api/crawler/status');
+  const j = await r.json();
+  const statusLabel = t('status.' + j.status) || j.status;
+  $('crawler-status').textContent = statusLabel + (j.paused ? ` (${t('dash.pause').toLowerCase()})` : '');
+  $('current-item').textContent = j.current_item ? ('— ' + j.current_item) : '';
+}
+
+function formatDuration(seconds) {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const mins = seconds / 60;
+  if (mins < 60) return `${mins.toFixed(1)} min`;
+  const hours = mins / 60;
+  if (hours < 48) return `${hours.toFixed(1)} h`;
+  const days = hours / 24;
+  return `${days.toFixed(1)} days`;
+}
+
+function windowHoursPerDay(cfg) {
+  if (!cfg || !cfg.crawl_schedule || !cfg.crawl_schedule.enabled) return 24;
+  const win = (cfg.crawl_schedule.windows || [])[0];
+  if (!win) return 24;
+  const [sh, sm] = win.start.split(':').map(Number);
+  const [eh, em] = win.end.split(':').map(Number);
+  let startMin = sh * 60 + sm, endMin = eh * 60 + em;
+  let diff = endMin - startMin;
+  if (diff <= 0) diff += 24 * 60;
+  return diff / 60;
+}
+
+async function refreshStats() {
+  const r = await fetch('/api/stats');
+  const j = await r.json();
+  let html = `<div class="table-scroll"><table><tr><th>${t('common.type')}</th><th>${t('dash.total')}</th><th>${t('dash.visible')}</th><th>${t('dash.statusBreakdown')}</th></tr>`;
+  for (const kind of ['live', 'vod', 'series']) {
+    const s = j[kind];
+    const parts = Object.entries(s.by_status || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
+    const hiddenCount = s.total - s.visible;
+    const visibleCell = hiddenCount > 0
+      ? `${s.visible} <span class="hint">(${hiddenCount} ${t('dash.hiddenByCategory')})</span>`
+      : `${s.visible}`;
+    html += `<tr><td>${kind}</td><td>${s.total}</td><td>${visibleCell}</td><td>${parts}</td></tr>`;
+  }
+  html += '</table></div>';
+  $('stats').innerHTML = html;
+
+  const eta = j.eta;
+  if (!eta || eta.pending_count === 0) {
+    $('eta-line').textContent = 'All pending titles have been probed.';
+  } else if (eta.avg_seconds_per_item == null) {
+    $('eta-line').textContent = `${eta.pending_count} titles pending — not enough history yet to estimate time remaining.`;
+  } else {
+    const activeStr = formatDuration(eta.eta_seconds_active);
+    const hoursPerDay = windowHoursPerDay(lastLoadedConfig);
+    const calendarSeconds = eta.eta_seconds_active / hoursPerDay * 24;
+    const calendarStr = formatDuration(calendarSeconds);
+    const windowNote = hoursPerDay < 24 ? ` (~${calendarStr} at your current ${hoursPerDay.toFixed(1)}h/day crawl window)` : '';
+    $('eta-line').textContent =
+      `${eta.pending_count} titles pending, ~${eta.avg_seconds_per_item}s/title → ~${activeStr} of active crawling left${windowNote}.`;
+  }
+}
+
+async function refreshLog() {
+  const r = await fetch('/api/logs?limit=50');
+  const j = await r.json();
+  $('log').textContent = j.map(l => `[${new Date(l.ts*1000).toLocaleString()}] ${l.level}: ${l.message}`).join('\n');
+}
+
+$('btn-pause').onclick = () => fetch('/api/crawler/pause', {method: 'POST'}).then(refreshStatus);
+$('btn-resume').onclick = () => fetch('/api/crawler/resume', {method: 'POST'}).then(refreshStatus);
+$('btn-sync').onclick = async () => {
+  const btn = $('btn-sync');
+  const original = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = t('js.syncing');
+  try {
+    await fetch('/api/crawler/sync-now', {method: 'POST'});
+  } finally {
+    btn.disabled = false;
+    btn.textContent = original;
+    refreshStats();
+    refreshLog();
+  }
+};
+$('btn-reset').onclick = () => { if (confirm(t('js.confirmReset'))) fetch('/api/crawler/reset-probes', {method: 'POST'}).then(refreshStats); };
+
+async function loadSettings() {
+  const r = await fetch('/api/config');
+  const cfg = await r.json();
+  cfgVersion = cfg._version;
+  lastLoadedConfig = cfg;
+  $('cfg-base-url').value = cfg.upstream.base_url;
+  $('cfg-username').value = cfg.upstream.username;
+  $('cfg-delay').value = cfg.crawler.request_delay_seconds;
+  $('cfg-reserve').value = cfg.crawler.reserve_slots;
+  $('cfg-sync-interval').value = cfg.crawler.sync_interval_minutes;
+  $('cfg-ffprobe').value = String(cfg.ffprobe.enabled);
+
+  $('cs-enabled').value = String(cfg.crawl_schedule.enabled);
+  $('cs-timezone').value = cfg.crawl_schedule.timezone || 'Europe/Berlin';
+  const win = (cfg.crawl_schedule.windows && cfg.crawl_schedule.windows[0]) || {};
+  $('cs-start').value = win.start || '02:00';
+  $('cs-end').value = win.end || '06:00';
+  const activeDays = new Set(win.days || ['mon','tue','wed','thu','fri','sat','sun']);
+  document.querySelectorAll('#cs-days input[type=checkbox]').forEach(cb => {
+    cb.checked = activeDays.has(cb.value);
+  });
+
+  $('tf-live-include').value = arrToLines(cfg.title_filters.live.include);
+  $('tf-live-exclude').value = arrToLines(cfg.title_filters.live.exclude);
+  $('tf-vod-include').value = arrToLines(cfg.title_filters.vod.include);
+  $('tf-vod-exclude').value = arrToLines(cfg.title_filters.vod.exclude);
+  $('tf-series-include').value = arrToLines(cfg.title_filters.series.include);
+  $('tf-series-exclude').value = arrToLines(cfg.title_filters.series.exclude);
+  $('af-vod-include').value = arrToLines(cfg.audio_filters.vod.include);
+  $('af-vod-exclude').value = arrToLines(cfg.audio_filters.vod.exclude);
+  $('af-series-include').value = arrToLines(cfg.audio_filters.series.include);
+  $('af-series-exclude').value = arrToLines(cfg.audio_filters.series.exclude);
+  $('af-on-unknown').value = cfg.audio_filters.on_unknown;
+}
+
+$('btn-save-settings').onclick = async () => {
+  const patch = {
+    _version: cfgVersion,
+    upstream: { base_url: $('cfg-base-url').value, username: $('cfg-username').value },
+    crawler: {
+      request_delay_seconds: parseFloat($('cfg-delay').value),
+      reserve_slots: parseInt($('cfg-reserve').value),
+      sync_interval_minutes: parseInt($('cfg-sync-interval').value),
+    },
+    ffprobe: { enabled: $('cfg-ffprobe').value === 'true' },
+    crawl_schedule: {
+      enabled: $('cs-enabled').value === 'true',
+      timezone: $('cs-timezone').value || 'Europe/Berlin',
+      windows: [{
+        days: Array.from(document.querySelectorAll('#cs-days input[type=checkbox]:checked')).map(cb => cb.value),
+        start: $('cs-start').value,
+        end: $('cs-end').value,
+      }],
+    },
+    title_filters: {
+      live: { include: linesToArr($('tf-live-include').value), exclude: linesToArr($('tf-live-exclude').value) },
+      vod: { include: linesToArr($('tf-vod-include').value), exclude: linesToArr($('tf-vod-exclude').value) },
+      series: { include: linesToArr($('tf-series-include').value), exclude: linesToArr($('tf-series-exclude').value) },
+    },
+    audio_filters: {
+      vod: { include: linesToArr($('af-vod-include').value), exclude: linesToArr($('af-vod-exclude').value) },
+      series: { include: linesToArr($('af-series-include').value), exclude: linesToArr($('af-series-exclude').value) },
+      on_unknown: $('af-on-unknown').value,
+    },
+  };
+  const pw = $('cfg-password').value;
+  if (pw) patch.upstream.password = pw;
+  const r = await fetch('/api/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(patch)});
+  const j = await r.json();
+  if (r.ok) {
+    $('settings-msg').textContent = t('js.saved');
+    await loadSettings();
+  } else if (r.status === 409) {
+    $('settings-msg').textContent = t('js.conflictSettings');
+    await loadSettings();
+  } else {
+    $('settings-msg').textContent = t('js.error') + ' ' + j.error;
+  }
+};
+
+$('btn-preview').onclick = async () => {
+  const body = {
+    kind: $('pv-kind').value,
+    title_include: linesToArr($('pv-title-include').value),
+    title_exclude: linesToArr($('pv-title-exclude').value),
+    audio_include: linesToArr($('pv-audio-include').value),
+    audio_exclude: linesToArr($('pv-audio-exclude').value),
+  };
+  const r = await fetch('/api/preview', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+  const j = await r.json();
+  if (!r.ok) { $('pv-result').innerHTML = '<p style="color:red">' + j.error + '</p>'; return; }
+  const fmt = (items) => items.map(i => `<li>${i.name} ${i.audio_tracks && i.audio_tracks.length ? '<span class="hint">[' + i.audio_tracks.join(', ') + ']</span>' : ''}</li>`).join('');
+  $('pv-result').innerHTML = `
+    <p>${j.passed_count} ${t('js.of')} ${j.total} ${t('js.pass')}.</p>
+    <div class="row">
+      <div class="col"><h4>${t('js.passedSample')}</h4><ul>${fmt(j.passed_sample)}</ul></div>
+      <div class="col"><h4>${t('js.filteredSample')}</h4><ul>${fmt(j.failed_sample)}</ul></div>
+    </div>`;
+};
+
+let catPage = 1;
+const CAT_PAGE_SIZE = 50;
+
+async function loadCatalogPage() {
+  const params = new URLSearchParams({
+    kind: $('cat-kind').value, q: $('cat-q').value, status: $('cat-status').value,
+    page: catPage, page_size: CAT_PAGE_SIZE,
+  });
+  const r = await fetch('/api/catalog?' + params);
+  const j = await r.json();
+  const tbody = document.querySelector('#cat-table tbody');
+  tbody.innerHTML = j.items.map(i => `
+    <tr>
+      <td>${i.name}${i.removed_at ? ' <span class="hint">' + t('js.removed') + '</span>' : ''}${i.overridden ? ' <span class="badge ok">always shown</span>' : ''}</td>
+      <td><span class="badge ${i.status}">${i.status}</span></td>
+      <td class="hint">${(i.audio_tracks || []).map(tr => tr.match_text).join(', ')}</td>
+      <td>
+        ${i.status !== 'n/a' ? `<button class="secondary reprobe-btn" data-kind="${$('cat-kind').value}" data-id="${i.item_id}">${t('js.reprobe')}</button>` : ''}
+        <button class="secondary override-btn" data-kind="${$('cat-kind').value}" data-id="${i.item_id}" data-overridden="${i.overridden}">${i.overridden ? 'Remove override' : 'Always show'}</button>
+      </td>
+    </tr>`).join('');
+  document.querySelectorAll('.reprobe-btn').forEach(btn => btn.onclick = () => {
+    fetch('/api/crawler/reprobe', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({kind: btn.dataset.kind, item_id: btn.dataset.id})});
+  });
+  document.querySelectorAll('.override-btn').forEach(btn => btn.onclick = async () => {
+    const isOverridden = btn.dataset.overridden === 'true';
+    const body = JSON.stringify({kind: btn.dataset.kind, item_id: btn.dataset.id});
+    if (isOverridden) {
+      await fetch('/api/overrides', {method: 'DELETE', headers: {'Content-Type': 'application/json'}, body});
+    } else {
+      await fetch('/api/overrides', {method: 'POST', headers: {'Content-Type': 'application/json'}, body});
+    }
+    loadCatalogPage();
+  });
+
+  const totalPages = Math.max(1, Math.ceil(j.total / CAT_PAGE_SIZE));
+  $('cat-page-info').textContent = `${t('js.page')} ${j.page} ${t('js.of')} ${totalPages} (${j.total} ${t('js.items')})`;
+  $('btn-cat-prev').disabled = j.page <= 1;
+  $('btn-cat-next').disabled = j.page >= totalPages;
+}
+
+$('btn-cat-search').onclick = () => { catPage = 1; loadCatalogPage(); };
+$('btn-cat-prev').onclick = () => { if (catPage > 1) { catPage--; loadCatalogPage(); } };
+$('btn-cat-next').onclick = () => { catPage++; loadCatalogPage(); };
+
+let allCategories = [];
+let excludedCategoryIds = new Set();
+
+async function loadCategories() {
+  const kind = $('cats-kind').value;
+  const r = await fetch('/api/categories?kind=' + kind);
+  const j = await r.json();
+  allCategories = j.categories;
+  excludedCategoryIds = new Set(allCategories.filter(c => c.excluded).map(c => c.category_id));
+  renderCategories();
+}
+
+function renderCategories() {
+  const q = $('cats-q').value.toLowerCase();
+  const tbody = document.querySelector('#cats-table tbody');
+  const filtered = allCategories.filter(c => c.category_name.toLowerCase().includes(q));
+  tbody.innerHTML = filtered.map(c => `
+    <tr>
+      <td><input type="checkbox" class="cat-checkbox" data-id="${c.category_id}" ${excludedCategoryIds.has(c.category_id) ? '' : 'checked'} style="width:auto;"></td>
+      <td>${c.category_name}</td>
+      <td class="hint">${c.item_count}</td>
+    </tr>`).join('');
+  document.querySelectorAll('.cat-checkbox').forEach(cb => {
+    cb.onchange = () => {
+      if (cb.checked) excludedCategoryIds.delete(cb.dataset.id);
+      else excludedCategoryIds.add(cb.dataset.id);
+    };
+  });
+  $('cats-msg').textContent = '';
+}
+
+$('cats-kind').onchange = loadCategories;
+$('cats-q').oninput = renderCategories;
+$('btn-cats-select-all').onclick = () => {
+  document.querySelectorAll('#cats-table .cat-checkbox').forEach(cb => {
+    cb.checked = true;
+    excludedCategoryIds.delete(cb.dataset.id);
+  });
+};
+$('btn-cats-select-none').onclick = () => {
+  document.querySelectorAll('#cats-table .cat-checkbox').forEach(cb => {
+    cb.checked = false;
+    excludedCategoryIds.add(cb.dataset.id);
+  });
+};
+$('btn-cats-save').onclick = async () => {
+  const kind = $('cats-kind').value;
+  const patch = {
+    _version: cfgVersion,
+    category_filters: { [kind]: { excluded_ids: Array.from(excludedCategoryIds) } },
+  };
+  const r = await fetch('/api/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(patch)});
+  const j = await r.json();
+  if (r.ok) {
+    await loadSettings();
+    $('cats-msg').textContent = t('js.saved');
+  } else if (r.status === 409) {
+    $('cats-msg').textContent = t('js.conflictCats');
+    await loadSettings();
+  } else {
+    $('cats-msg').textContent = t('js.error') + ' ' + j.error;
+  }
+};
+
+document.querySelector('nav a[data-tab="categories"]').addEventListener('click', () => {
+  if (allCategories.length === 0) loadCategories();
+});
+
+async function loadDelivered() {
+  const kind = $('del-kind').value;
+  const r = await fetch('/api/delivered/summary?kind=' + kind);
+  const j = await r.json();
+  $('del-total-visible').textContent = j.total_visible;
+  $('del-category-count').textContent = j.categories.length;
+
+  const container = $('del-categories');
+  container.innerHTML = j.categories.map(c => `
+    <details class="del-category" data-kind="${kind}" data-category-id="${c.category_id}">
+      <summary>${c.category_name} <span class="hint">(${c.item_count})</span></summary>
+      <div class="del-items hint">Loading…</div>
+    </details>`).join('');
+
+  document.querySelectorAll('.del-category').forEach(det => {
+    det.addEventListener('toggle', async () => {
+      if (!det.open || det.dataset.loaded) return;
+      det.dataset.loaded = '1';
+      const itemsDiv = det.querySelector('.del-items');
+      const params = new URLSearchParams({kind: det.dataset.kind, category_id: det.dataset.categoryId});
+      const ir = await fetch('/api/delivered/items?' + params);
+      const ij = await ir.json();
+      itemsDiv.innerHTML = '<ul>' + ij.items.map(i => `<li>${i.name}</li>`).join('') + '</ul>';
+    }, {once: true});
+  });
+}
+
+$('del-kind').onchange = loadDelivered;
+document.querySelector('nav a[data-tab="delivered"]').addEventListener('click', () => {
+  loadDelivered();
+});
+
+refreshStatus(); refreshStats(); refreshLog(); loadSettings();
+setInterval(() => { refreshStatus(); refreshStats(); refreshLog(); }, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+{
+  "info": {
+    "streams": [
+      { "codec_type": "audio", "codec_name": "ac3", "channel_layout": "5.1(side)",
+        "tags": { "language": "fre", "title": "French" } },
+      { "codec_type": "audio", "codec_name": "aac", "channel_layout": "stereo",
+        "language": "ger" }
+    ]
+  }
+}

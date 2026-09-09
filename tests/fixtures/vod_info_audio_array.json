@@ -1,0 +1,9 @@
+{
+  "info": {
+    "audio": [
+      { "codec_name": "aac", "channels": 2, "tags": { "LANGUAGE": "eng", "title": "English Stereo" } },
+      { "codec_name": "ac3", "channels": 6, "tags": { "LANGUAGE": "ger", "title": "German 5.1" } }
+    ]
+  },
+  "movie_data": { "stream_id": 102, "container_extension": "mp4" }
+}

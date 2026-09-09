@@ -1,0 +1,58 @@
+upstream:
+  base_url: "http://provider.example:8080"
+  username: "your_username"
+  password: "your_password"
+  timeout_seconds: 20
+  user_agent: "Smarters Pro"
+
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+database:
+  path: "./data/proxy.db"
+
+ffprobe:
+  enabled: false
+  timeout_seconds: 25
+  binary: "ffprobe"
+
+crawler:
+  request_delay_seconds: 1.0
+  reserve_slots: 1
+  slot_recheck_seconds: 60
+  sync_interval_minutes: 360
+  purge_after_days: 30
+  log_max_age_days: 30
+  log_max_rows: 5000
+
+crawl_schedule:
+  enabled: true
+  windows:
+    - days: [mon, tue, wed, thu, fri, sat, sun]
+      start: "02:00"
+      end: "06:00"
+  timezone: "Europe/Berlin"
+
+title_filters:
+  live:
+    include: []
+    exclude: ['(?i)\bxxx\b', '(?i)adult']
+    match_category: false
+  vod:
+    include: []
+    exclude: ['(?i)\bxxx\b']
+    match_category: false
+  series:
+    include: []
+    exclude: []
+    match_category: false
+
+audio_filters:
+  vod:
+    include: ['(?i)\b(ger|deu|german|deutsch)\b']
+    exclude: []
+  series:
+    include: ['(?i)\b(ger|deu|german|deutsch)\b']
+    exclude: []
+  on_unknown: keep
