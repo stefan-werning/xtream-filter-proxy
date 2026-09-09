@@ -828,8 +828,24 @@ document.querySelector('nav a[data-tab="delivered"]').addEventListener('click', 
   loadDelivered();
 });
 
-refreshStatus(); refreshStats(); refreshLog(); loadSettings();
-setInterval(() => { refreshStatus(); refreshStats(); refreshLog(); }, 5000);
+loadSettings();
+
+// Self-scheduling poll loop instead of a fixed setInterval: on a slow host
+// (e.g. a Raspberry Pi under crawler load) a fixed interval keeps firing
+// even while the previous round's requests are still in flight, piling up
+// overlapping fetches. This waits for the current round to finish (success
+// or failure) before scheduling the next one 5s later.
+let pollTimer = null;
+async function pollLoop() {
+  try {
+    await Promise.all([refreshStatus(), refreshStats(), refreshLog()]);
+  } catch (e) {
+    console.error('poll failed', e);
+  } finally {
+    pollTimer = setTimeout(pollLoop, 5000);
+  }
+}
+pollLoop();
 </script>
 </body>
 </html>
