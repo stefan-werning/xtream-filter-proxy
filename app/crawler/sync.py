@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import time
 
@@ -93,6 +94,7 @@ async def sync_kind(db: Database, client: UpstreamClient, kind: str) -> dict:
             category_id = entry.get("category_id")
             category_id = str(category_id) if category_id is not None else None
             container_ext = entry.get("container_extension")
+            raw_json = json.dumps(entry)
 
             row = cur.execute(
                 "SELECT name, removed_at FROM items WHERE kind = ? AND item_id = ?",
@@ -101,9 +103,9 @@ async def sync_kind(db: Database, client: UpstreamClient, kind: str) -> dict:
 
             if row is None:
                 cur.execute(
-                    "INSERT INTO items (kind, item_id, name, category_id, container_ext, "
-                    "first_seen, last_seen, removed_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)",
-                    (kind, item_id, name, category_id, container_ext, now, now),
+                    "INSERT INTO items (kind, item_id, name, category_id, container_ext, raw_json, "
+                    "first_seen, last_seen, removed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)",
+                    (kind, item_id, name, category_id, container_ext, raw_json, now, now),
                 )
                 stats["new"] += 1
                 if kind in ("vod", "series"):
@@ -120,9 +122,9 @@ async def sync_kind(db: Database, client: UpstreamClient, kind: str) -> dict:
                 was_removed = row["removed_at"] is not None
                 name_changed = row["name"] != name
                 cur.execute(
-                    "UPDATE items SET name = ?, category_id = ?, container_ext = ?, "
+                    "UPDATE items SET name = ?, category_id = ?, container_ext = ?, raw_json = ?, "
                     "last_seen = ?, removed_at = NULL WHERE kind = ? AND item_id = ?",
-                    (name, category_id, container_ext, now, kind, item_id),
+                    (name, category_id, container_ext, raw_json, now, kind, item_id),
                 )
                 if was_removed:
                     stats["returned"] = stats.get("returned", 0) + 1

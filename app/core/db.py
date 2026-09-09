@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS items (
   name          TEXT NOT NULL,
   category_id   TEXT,
   container_ext TEXT,
+  raw_json      TEXT,
   first_seen    INTEGER NOT NULL,
   last_seen     INTEGER NOT NULL,
   removed_at    INTEGER,
@@ -98,9 +99,16 @@ class Database:
             conn = self._connect()
             try:
                 conn.executescript(SCHEMA)
+                self._add_column_if_missing(conn, "items", "raw_json", "TEXT")
                 conn.commit()
             finally:
                 conn.close()
+
+    @staticmethod
+    def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
     @property
     def conn(self) -> sqlite3.Connection:

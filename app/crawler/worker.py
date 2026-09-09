@@ -38,6 +38,7 @@ class CrawlerWorker:
         self._lock = threading.RLock()
         self._last_sync_ts = 0.0
         self._last_probed_kind: str | None = None
+        self._last_cache_invalidation_ts = 0.0
 
     # -- public control -------------------------------------------------
 
@@ -73,6 +74,24 @@ class CrawlerWorker:
     def status(self) -> dict:
         with self._lock:
             return {"status": self._status, "current_item": self._current_item}
+
+    def _invalidate_cache_throttled(self, min_interval: float = 3.0) -> None:
+        """Bumps data_version (and clears the filter cache) at most once
+        per min_interval seconds, instead of on every single probe result.
+        The cache rebuild re-reads the full items/probe_state/audio_tracks
+        tables for a kind into Python objects -- fine to redo occasionally,
+        wasteful to redo after every one of potentially thousands of probes
+        in a row, especially on memory-constrained hardware. The DB write
+        itself already happened by the time this is called; this only
+        controls how promptly the *served* catalog reflects it. Manual,
+        user-triggered actions (reprobe, reset, config/category changes)
+        bypass this and invalidate immediately.
+        """
+        now = time.time()
+        if now - self._last_cache_invalidation_ts >= min_interval:
+            invalidate_filter_cache()
+            data_version.bump()
+            self._last_cache_invalidation_ts = now
 
     def reset_all_probes(self) -> None:
         now = int(time.time())
@@ -262,8 +281,9 @@ class CrawlerWorker:
             logger.exception("probe failed for %s:%s", kind, item_id)
             self._mark_probe(kind, item_id, "error", None, str(e))
             self.db.log("info", f"probe {kind}:{item_id} '{name}' -> error: {e}")
-            invalidate_filter_cache()
-            data_version.bump()
+            # _mark_probe resets an 'error' outcome back to 'pending' (with
+            # backoff) rather than leaving 'error' set -- so, like the
+            # deferred case above, this can't change what's visible either.
             return False
 
         if needs_ffprobe_retry:
@@ -281,8 +301,12 @@ class CrawlerWorker:
                     (now, kind, item_id),
                 )
             self.db.log("info", f"probe {kind}:{item_id} '{name}' -> deferred (api result needs ffprobe confirmation)")
-            invalidate_filter_cache()
-            data_version.bump()
+            # No cache invalidation here: 'deferred' isn't in the set of
+            # "known" statuses compute_visible_for_kind checks (ok/
+            # no_audio_info/error), so this transition can never change
+            # what's visible -- invalidating would force every VOD/series
+            # item to be reloaded and re-filtered on the next request for
+            # no visible-set change at all.
             return False
 
         if blocked:
@@ -316,8 +340,12 @@ class CrawlerWorker:
             self._mark_probe(kind, item_id, "no_audio_info", source, None)
             self.db.log("info", f"probe {kind}:{item_id} '{name}' -> no_audio_info via {source}")
 
-        invalidate_filter_cache()
-        data_version.bump()
+        # ok/no_audio_info are the only outcomes that can actually change
+        # what's visible (they're the "known" statuses the language filter
+        # checks) -- throttled so a crawler running through many probes in
+        # a row doesn't force a full items/probe_state/audio_tracks reload
+        # into Python objects after every single one of them.
+        self._invalidate_cache_throttled()
         return False
 
     def _item_name(self, kind: str, item_id: str) -> str:

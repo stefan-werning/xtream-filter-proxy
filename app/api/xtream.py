@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 from fastapi import APIRouter, Query, Request, Response
@@ -34,20 +35,35 @@ def _db_list(db, kind: str) -> list[dict]:
     actions (get_*_streams, get_series, get_*_categories) must NEVER wait on
     an upstream request -- they are served entirely from the DB, which the
     sync job keeps fresh in the background.
+
+    Each row's raw_json (the original upstream entry, captured at sync time)
+    is used as the base so fields real clients rely on for display --
+    stream_icon, stream_type, rating, cover, etc. -- are preserved instead of
+    being stripped down to just the handful of fields our filtering needs.
+    Falls back to a minimal hand-built entry for rows synced before raw_json
+    existed.
     """
     cur = db.conn.execute(
-        "SELECT item_id, name, category_id, container_ext FROM items "
+        "SELECT item_id, name, category_id, container_ext, raw_json FROM items "
         "WHERE kind = ? AND removed_at IS NULL",
         (kind,),
     )
     id_field = LIST_ID_FIELD[kind]
     out = []
     for row in cur.fetchall():
-        entry = {
-            "name": row["name"],
-            id_field: row["item_id"],
-            "category_id": row["category_id"],
-        }
+        entry = None
+        if row["raw_json"]:
+            try:
+                parsed = json.loads(row["raw_json"])
+                if isinstance(parsed, dict):
+                    entry = parsed
+            except (TypeError, ValueError):
+                entry = None
+        if entry is None:
+            entry = {}
+        entry["name"] = row["name"]
+        entry[id_field] = row["item_id"]
+        entry["category_id"] = row["category_id"]
         if kind == "vod":
             entry["container_extension"] = row["container_ext"]
         out.append(entry)
@@ -134,7 +150,25 @@ async def player_api(request: Request):
         if not action:
             return JSONResponse({"user_info": {}, "server_info": {}}, status_code=502)
         return JSONResponse({"error": "upstream unavailable"}, status_code=502)
+    if not action and isinstance(data, dict) and "server_info" in data:
+        # The bare login call's upstream response includes the *real*
+        # provider's server_info (url/port/https_port). Clients like
+        # Smarters read that back and switch to talking to it directly for
+        # every subsequent request, completely bypassing this proxy and its
+        # filtering. Rewrite it to point back at us.
+        data["server_info"] = _rewrite_server_info(request, data["server_info"])
     return JSONResponse(data)
+
+
+def _rewrite_server_info(request: Request, server_info: dict) -> dict:
+    host = request.url.hostname or "localhost"
+    port = request.url.port or (443 if request.url.scheme == "https" else 80)
+    info = dict(server_info) if isinstance(server_info, dict) else {}
+    info["url"] = host
+    info["port"] = str(port)
+    info["https_port"] = str(port) if request.url.scheme == "https" else info.get("https_port", str(port))
+    info["server_protocol"] = request.url.scheme
+    return info
 
 
 def _categories_from_db(db, kind: str) -> list[dict]:
