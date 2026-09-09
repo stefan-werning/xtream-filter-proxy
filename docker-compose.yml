@@ -6,3 +6,7 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+    # Must exceed uvicorn's --timeout-graceful-shutdown (130s, see Dockerfile)
+    # so `docker compose down`/`stop` never SIGKILLs mid-connection -- the
+    # upstream account allows only a single concurrent connection.
+    stop_grace_period: 140s
