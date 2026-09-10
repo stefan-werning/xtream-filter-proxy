@@ -5,6 +5,8 @@ upstream:
   timeout_seconds: 20
   user_agent: "Smarters Pro"
 
+# Informational only -- the actual listen address/port come from how uvicorn
+# is started (docker-compose.yml's "ports:" mapping, or the --port flag).
 server:
   host: "0.0.0.0"
   port: 8080
@@ -56,3 +58,16 @@ audio_filters:
     include: ['(?i)\b(ger|deu|german|deutsch)\b']
     exclude: []
   on_unknown: keep
+
+# Categories to hide entirely. Easiest to manage from the Web UI's
+# "Categories" tab, which lists every category with its name and item count
+# and writes the IDs back here. Titles in an excluded category are hidden
+# and (for vod/series) skipped by the crawler, so probing effort goes only
+# into categories you actually want.
+category_filters:
+  live:
+    excluded_ids: []
+  vod:
+    excluded_ids: []
+  series:
+    excluded_ids: []
