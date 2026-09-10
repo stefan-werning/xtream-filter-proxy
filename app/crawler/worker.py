@@ -102,17 +102,23 @@ class CrawlerWorker:
         with self._lock:
             return {"status": self._status, "current_item": self._current_item}
 
-    def _invalidate_cache_throttled(self, min_interval: float = 3.0) -> None:
-        """Bumps data_version (and clears the filter cache) at most once
-        per min_interval seconds, instead of on every single probe result.
-        The cache rebuild re-reads the full items/probe_state/audio_tracks
-        tables for a kind into Python objects -- fine to redo occasionally,
-        wasteful to redo after every one of potentially thousands of probes
-        in a row, especially on memory-constrained hardware. The DB write
-        itself already happened by the time this is called; this only
-        controls how promptly the *served* catalog reflects it. Manual,
-        user-triggered actions (reprobe, reset, config/category changes)
-        bypass this and invalidate immediately.
+    def _invalidate_cache_throttled(self, min_interval: float = 120.0) -> None:
+        """Bumps data_version (and clears the filter + rendered-response
+        caches) at most once per min_interval seconds, instead of on every
+        single probe result.
+
+        Rebuilding the served lists means re-reading the items /
+        probe_state / audio_tracks tables into Python and re-serialising a
+        six-figure catalogue -- ~15s on a Raspberry Pi. Doing that every
+        few seconds through a long crawl would keep get_vod_streams
+        perpetually slow (Smarters Pro on Google TV then times out and
+        shows an empty VOD tab). A probe result only shifts an item across
+        the language filter, so letting the *served* catalogue lag the
+        crawl by up to min_interval is fine. The dashboard's progress
+        numbers are refreshed separately (_notify_progress_throttled, 2s),
+        so the UI still feels live. Manual, user-triggered actions
+        (reprobe, reset, config / category changes) bypass this and
+        invalidate immediately.
         """
         now = time.time()
         if now - self._last_cache_invalidation_ts >= min_interval:
@@ -508,12 +514,11 @@ class CrawlerWorker:
 
         # ok/no_audio_info are the only outcomes that can actually change
         # what's visible (they're the "known" statuses the language filter
-        # checks) -- throttled so a crawler running through many probes in
-        # a row doesn't force a full items/probe_state/audio_tracks reload
-        # into Python objects after every single one of them.
+        # checks) -- heavily throttled so a long crawl doesn't keep
+        # rebuilding the served catalogue (see _invalidate_cache_throttled).
         self._invalidate_cache_throttled()
         # Separately nudge the dashboard's by-status counts: the invalidate
-        # above is throttled to 3s and would skip its data_version bump (and
+        # above is throttled long and would skip its data_version bump (and
         # thus the SSE event) inside that window even though the counts moved.
         self._notify_progress_throttled()
         return False
