@@ -365,9 +365,12 @@ skipping the remote step silently if it's unreachable.
 with the crawler writing continuously, it restarts on every write and can
 hang indefinitely.)
 
+Needs the `sqlite3` CLI (`apt install sqlite3`).
+
 ```bash
 cp backup.env.example backup.env
-# edit backup.env: set REMOTE_DIR, or SMB_HOST/SMB_SHARE for a CIFS share
+# edit backup.env: set REMOTE_DIR (an already-mounted path), or
+# SMB_HOST / SMB_SHARE / SMB_SUBDIR for a CIFS share.
 ./backup.sh            # test run — check data/backup.log
 ```
 
@@ -378,12 +381,16 @@ Then add it to cron (as the user that owns `data/`):
 ```
 
 The SMB push mounts the share per run, so the cron user needs passwordless
-`sudo mount -t cifs` / `sudo umount`. On a dedicated box the simplest way
-is a line in `/etc/sudoers.d/`:
+`sudo mount` / `sudo umount` / `sudo mkdir`. On a dedicated box, a line in
+`/etc/sudoers.d/`:
 
 ```
 you ALL=(root) NOPASSWD: /usr/bin/mount, /usr/bin/umount, /usr/bin/mkdir
 ```
+
+Older NAS boxes (e.g. a Synology DS21x) only offer guest access over SMB1
+— set `SMB_OPTS=guest,vers=1.0,uid=1000,gid=1000` in that case. SMB1 is
+fine on a trusted LAN for a backup target.
 
 To restore: stop the container, `gunzip -c proxy-YYYYMMDD-HHMMSS.db.gz >
 data/proxy.db` (remove any stale `proxy.db-wal` / `proxy.db-shm`), start
