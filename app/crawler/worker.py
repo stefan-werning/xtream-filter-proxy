@@ -40,6 +40,7 @@ class CrawlerWorker:
         self._last_sync_ts = 0.0
         self._last_probed_kind: str | None = None
         self._last_cache_invalidation_ts = 0.0
+        self._last_progress_notify_ts = 0.0
 
     # -- public control -------------------------------------------------
 
@@ -112,6 +113,23 @@ class CrawlerWorker:
             invalidate_filter_cache()
             data_version.bump()
             self._last_cache_invalidation_ts = now
+
+    def _notify_progress_throttled(self, min_interval: float = 2.0) -> None:
+        """Nudge the dashboard to refetch /api/stats after a probe_state
+        status change that the by-status counts should reflect (deferred,
+        error, ok, no_audio_info) but that doesn't change the visible set,
+        so _invalidate_cache_throttled / data_version wouldn't fire.
+        Throttled so a burst of fast API-only probes doesn't spam events.
+        """
+        now = time.time()
+        if now - self._last_progress_notify_ts >= min_interval:
+            self._last_progress_notify_ts = now
+            try:
+                from app.core.events import broker
+
+                broker.publish("stats_dirty", {"reason": "progress"})
+            except Exception:
+                pass
 
     def reset_all_probes(self) -> None:
         now = int(time.time())
@@ -339,6 +357,7 @@ class CrawlerWorker:
             # _mark_probe resets an 'error' outcome back to 'pending' (with
             # backoff) rather than leaving 'error' set -- so, like the
             # deferred case above, this can't change what's visible either.
+            self._notify_progress_throttled()
             return False
 
         if needs_ffprobe_retry:
@@ -361,7 +380,9 @@ class CrawlerWorker:
             # no_audio_info/error), so this transition can never change
             # what's visible -- invalidating would force every VOD/series
             # item to be reloaded and re-filtered on the next request for
-            # no visible-set change at all.
+            # no visible-set change at all. The by-status counts do change,
+            # though, so nudge the dashboard.
+            self._notify_progress_throttled()
             return False
 
         if blocked:
@@ -401,6 +422,10 @@ class CrawlerWorker:
         # a row doesn't force a full items/probe_state/audio_tracks reload
         # into Python objects after every single one of them.
         self._invalidate_cache_throttled()
+        # Separately nudge the dashboard's by-status counts: the invalidate
+        # above is throttled to 3s and would skip its data_version bump (and
+        # thus the SSE event) inside that window even though the counts moved.
+        self._notify_progress_throttled()
         return False
 
     def _item_name(self, kind: str, item_id: str) -> str:
