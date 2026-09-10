@@ -180,6 +180,16 @@ def _apply_vod_debug(db, entries: list) -> list:
             for e in entries:
                 e["container_extension"] = forced
 
+    if "catids_str" in parts:
+        # category_ids as a string array matching category_id's type
+        for e in entries:
+            cid = e.get("category_id")
+            if cid is not None:
+                e["category_ids"] = [str(cid)]
+    if "no_catids" in parts:
+        for e in entries:
+            e.pop("category_ids", None)
+
     return entries
 
 
