@@ -111,6 +111,14 @@ _STRICT_VOD_KEYS = (
     "container_extension", "custom_sid", "direct_source",
 )
 
+# Typographic characters -> plain ASCII, for the _ascii debug mode.
+_ASCII_FOLD = {
+    "‘": "'", "’": "'", "‚": ",", "‛": "'",
+    "“": '"', "”": '"', "„": '"',
+    "–": "-", "—": "-", "―": "-", "‐": "-", "‒": "-",
+    "…": "...", " ": " ", " ": " ", "－": "-",
+}
+
 
 def _strict_vod_entry(e: dict) -> dict:
     """Only the fields in the documented Xtream get_vod_streams shape, with
@@ -133,6 +141,40 @@ def _strict_vod_entry(e: dict) -> dict:
     if out.get("added") is None:
         out["added"] = ""
     return out
+
+
+def _apply_vod_debug(db, entries: list) -> list:
+    """Debug knobs for the Google-TV empty-VOD-list issue, toggled via
+    settings keys (no rebuild): set with
+      /api/settings/set  {"key": "debug_vod", "value": "strict,limit=2000,ascii"}
+    parts:
+      strict        -> only the documented Xtream fields
+      limit=N       -> first N entries only
+      ascii         -> fold typographic chars in name to plain ASCII
+    Empty / unset -> untouched.
+    """
+    raw = db.get_setting("debug_vod", "") or ""
+    parts = {p.strip() for p in raw.split(",") if p.strip()}
+    if not parts:
+        return entries
+
+    if any(p == "strict" for p in parts):
+        entries = [_strict_vod_entry(e) for e in entries]
+
+    for p in parts:
+        if p.startswith("limit="):
+            try:
+                entries = entries[: int(p.split("=", 1)[1])]
+            except ValueError:
+                pass
+
+    if "ascii" in parts:
+        for e in entries:
+            n = e.get("name")
+            if isinstance(n, str):
+                e["name"] = "".join(_ASCII_FOLD.get(c, c) for c in n)
+
+    return entries
 
 
 def _normalize_vod_types(entry: dict) -> None:
@@ -223,11 +265,8 @@ async def player_api(request: Request):
         kind = STREAM_ACTIONS[action]
         data = _db_list(state.db, kind)
         filtered = _filter_stream_list(state, data, kind)
-        # Temporary: ?_shape=strict trims VOD entries to the minimal
-        # documented Xtream structure, to isolate which extra field a
-        # strict client chokes on.
-        if kind == "vod" and params.get("_shape") == "strict":
-            filtered = [_strict_vod_entry(e) for e in filtered]
+        if kind == "vod":
+            filtered = _apply_vod_debug(state.db, filtered)
         return JSONResponse(filtered)
 
     if action == "get_series":
