@@ -160,9 +160,9 @@ Then open `http://<pi-ip>:8080/` from any device on your network.
   crawler probes one title at a time and waits for the connection slot;
   tens of thousands of titles can take days of wall-clock time. Use
   `crawl_schedule` to confine it to hours you don't watch TV, and use the
-  Categories tab to exclude categories you don't care about — excluded
-  categories are skipped entirely, which is by far the biggest speedup
-  available.
+  Categories tab: *Excluded* and *Always deliver* categories are both
+  skipped by the crawler, so narrowing down to the categories that
+  actually need probing is by far the biggest speedup available.
 
 ---
 
