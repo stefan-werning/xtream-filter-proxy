@@ -61,3 +61,20 @@ async def test_unparseable_or_missing_info_does_not_block(tmp_path):
             return {"user_info": {"active_cons": "?", "max_connections": None}}
 
     assert await worker._has_free_slot({"crawler": {}}, Bad()) is True
+
+
+@pytest.mark.asyncio
+async def test_cooldown_blocks_right_after_an_ffprobe(tmp_path):
+    """No ffprobe for ffprobe_cooldown_seconds after the last one, so the
+    panel has time to release the previous stream connection."""
+    import time
+
+    worker = make_worker(tmp_path)
+    cfg = {"crawler": {"reserve_slots": 0, "ffprobe_cooldown_seconds": 45}}
+    client = FakeClient(active=1, max_conns=1)
+
+    worker._last_ffprobe_ts = time.time()          # just ran one
+    assert await worker._has_free_slot(cfg, client) is False
+
+    worker._last_ffprobe_ts = time.time() - 50     # cooldown elapsed
+    assert await worker._has_free_slot(cfg, client) is True

@@ -11,7 +11,7 @@ from app.core.catalog import data_version, invalidate_filter_cache
 from app.core.config import ConfigManager
 from app.core.db import Database
 from app.core.upstream import UpstreamClient, UpstreamError
-from app.crawler.ffprobe import ffprobe_available, run_ffprobe
+from app.crawler.ffprobe import FfprobeFailedError, ffprobe_available, run_ffprobe
 from app.crawler.schedule import is_within_schedule
 from app.crawler.sync import run_full_sync
 
@@ -41,6 +41,12 @@ class CrawlerWorker:
         self._last_probed_kind: str | None = None
         self._last_cache_invalidation_ts = 0.0
         self._last_progress_notify_ts = 0.0
+        # When the last ffprobe finished. IPTV panels take a while to
+        # actually release a stream connection after the client
+        # disconnects, so firing the next ffprobe too soon hits the
+        # connection limit (HTTP 458 -> ffprobe exit 1). We hold off for
+        # ffprobe_cooldown_seconds after each run.
+        self._last_ffprobe_ts = 0.0
 
     # -- public control -------------------------------------------------
 
@@ -320,13 +326,21 @@ class CrawlerWorker:
         ffprobe (which opens a real stream connection). Only relevant right
         before ffprobe -- plain player_api calls are cheap either way.
 
-        Note: on the providers seen so far, the very player_api call this
-        makes is itself counted in `active_cons` while it's in flight, so a
-        totally idle account still reports active_cons == 1. We therefore
-        compare `active_cons - 1` (other connections, i.e. actual streams)
-        against the limit. Without this, an account with max_connections
-        == 1 could never pass the check and ffprobe would never run.
+        Two gates:
+        1. A cooldown since the last ffprobe: the panel hasn't necessarily
+           released that connection yet even though ffprobe exited, and
+           firing another one into the still-held slot gets HTTP 458 (which
+           surfaces as ffprobe exit 1).
+        2. active_cons headroom. Note the very player_api call this makes is
+           itself counted in active_cons while in flight, so an idle
+           account still reports active_cons == 1 -- we compare
+           `active_cons - 1` (other connections, i.e. real streams) against
+           the limit, or a max_connections==1 account could never pass.
         """
+        cooldown = cfg["crawler"].get("ffprobe_cooldown_seconds", 45)
+        if time.time() - self._last_ffprobe_ts < cooldown:
+            return False
+
         try:
             user_info = await client.player_api({"action": ""})
         except UpstreamError:
@@ -562,11 +576,24 @@ class CrawlerWorker:
                 if not await self._has_free_slot(cfg, client):
                     return [], "api", True, False
                 last_attempted_source = "ffprobe"
-                result = await run_ffprobe(
-                    stream_url,
-                    cfg["ffprobe"].get("binary", "ffprobe"),
-                    cfg["ffprobe"].get("timeout_seconds", 25),
-                )
+                try:
+                    result = await run_ffprobe(
+                        stream_url,
+                        cfg["ffprobe"].get("binary", "ffprobe"),
+                        cfg["ffprobe"].get("timeout_seconds", 25),
+                    )
+                except FfprobeFailedError as e:
+                    self._last_ffprobe_ts = time.time()
+                    msg = str(e)
+                    # An immediate non-zero exit with nothing on stderr is
+                    # almost always the panel's connection limit (HTTP 458)
+                    # -- a slot that looked free but wasn't yet. Treat it
+                    # like a busy slot: retry without a backoff penalty
+                    # instead of burning an attempt on a hard 'error'.
+                    if "exit code 1:" in msg and msg.strip().endswith("exit code 1:"):
+                        return [], "ffprobe", True, False
+                    raise
+                self._last_ffprobe_ts = time.time()
                 ffprobe_tracks = parse_audio_tracks(result)
                 if ffprobe_tracks:
                     # ffprobe sees the real container, so it supersedes a

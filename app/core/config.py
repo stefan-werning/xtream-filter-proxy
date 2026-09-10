@@ -22,6 +22,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "request_delay_seconds": 1.0,
         "reserve_slots": 0,
         "slot_recheck_seconds": 60,
+        "ffprobe_cooldown_seconds": 45,
         "sync_interval_minutes": 360,
         "purge_after_days": 30,
         "log_max_age_days": 30,
