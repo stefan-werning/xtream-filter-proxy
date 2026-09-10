@@ -190,6 +190,17 @@ def _apply_vod_debug(db, entries: list) -> list:
         for e in entries:
             e.pop("category_ids", None)
 
+    if "r5_str" in parts:
+        # rating_5based as a string, like get_series serves it
+        for e in entries:
+            if "rating_5based" in e and e["rating_5based"] is not None:
+                e["rating_5based"] = str(e["rating_5based"])
+    if "ids_str" in parts:
+        # stream_id as a string
+        for e in entries:
+            if e.get("stream_id") is not None:
+                e["stream_id"] = str(e["stream_id"])
+
     return entries
 
 
