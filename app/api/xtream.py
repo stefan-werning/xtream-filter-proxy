@@ -4,7 +4,7 @@ import json
 import logging
 
 from fastapi import APIRouter, Query, Request, Response
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 import httpx
 
 from app.core.catalog import compute_visible_for_kind, data_version
@@ -13,6 +13,21 @@ from app.core.upstream import UpstreamClient, UpstreamError
 logger = logging.getLogger("proxy.api")
 
 router = APIRouter()
+
+
+class JSONResponse(Response):
+    """Xtream panels serve player_api.php as ASCII-escaped JSON with an
+    explicit utf-8 charset. Some clients (Smarters Pro on Google TV) mangle
+    raw UTF-8 bytes under a charset-less `application/json` and then drop
+    the whole list on the first bad character -- German titles with
+    umlauts. Match the panel: ensure_ascii + charset."""
+
+    media_type = "application/json; charset=utf-8"
+
+    def render(self, content) -> bytes:
+        return json.dumps(
+            content, ensure_ascii=True, allow_nan=False, separators=(",", ":")
+        ).encode("ascii")
 
 CATEGORY_ACTIONS = {
     "get_live_categories": "live",

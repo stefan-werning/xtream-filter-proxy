@@ -72,3 +72,23 @@ def test_num_is_renumbered_1_to_n(tmp_path):
     # stream_id (the real identity) is untouched and numeric
     assert sorted(e["stream_id"] for e in items) == [100, 200, 300]
     assert all(isinstance(e["stream_id"], int) for e in items)
+
+
+def test_response_is_ascii_escaped_with_charset(tmp_path):
+    """Xtream panels serve ASCII-escaped JSON with charset=utf-8; a strict
+    client mangles raw UTF-8 under charset-less application/json and drops
+    the list on the first umlaut. Match the panel."""
+    app, db = make_app(tmp_path)
+    add_vod(db, "1", "DE - Brüder & Schwestern (Ölkrieg)", "1", num=99)
+    invalidate_filter_cache()
+
+    r = TestClient(app).get("/player_api.php", params={
+        "username": "x", "password": "y", "action": "get_vod_streams",
+    })
+    assert r.status_code == 200
+    assert "charset=utf-8" in r.headers["content-type"].lower()
+    # raw body is pure ASCII -- umlauts are \uXXXX escapes
+    r.content.decode("ascii")  # would raise if any byte > 0x7f
+    assert b"\\u00fc" in r.content  # ü
+    # and it still parses back to the right string
+    assert r.json()[0]["name"] == "DE - Brüder & Schwestern (Ölkrieg)"
