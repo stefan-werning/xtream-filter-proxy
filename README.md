@@ -10,9 +10,9 @@ Typical use: a provider bundles 150 000 movies in a dozen languages, and you
 only ever watch the German ones. Instead of scrolling past everything else,
 you point your player at this proxy and see only what matches your rules.
 
-**Works with any Xtream-Codes client**, e.g. **Smarters Pro** (IPTV Smarters
-Pro), **TiviMate**, or anything else offering an "Xtream Codes API" login
-type. Nothing player-specific is required.
+**Works with any Xtream-Codes client**, e.g. **Smarters Pro**, **TiviMate**,
+or anything else offering an "Xtream Codes API" login type. Nothing
+player-specific is required.
 
 > **Note:** This project only filters and forwards what your own provider
 > account already serves you. It contains no content, no provider list, and
