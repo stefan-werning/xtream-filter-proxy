@@ -293,6 +293,18 @@ async def player_api(request: Request):
 
     if action in STREAM_ACTIONS:
         kind = STREAM_ACTIONS[action]
+        # DEBUG: serve the provider's live get_vod_streams verbatim, only
+        # narrowed to the categories our filter would allow -- entries 100%
+        # untouched (provider num, category_ids, types). Isolates whether
+        # our transform pipeline is what the Google-TV client rejects.
+        if kind == "vod" and state.db.get_setting("debug_vod", "") == "upstream_raw":
+            client = UpstreamClient(state.config_mgr.get())
+            up_list = await client.player_api({"action": "get_vod_streams"})
+            allowed = {c["category_id"] for c in _filter_categories(
+                state, _categories_from_db(state.db, "vod"), "vod")}
+            out = [e for e in up_list if isinstance(e, dict)
+                   and str(e.get("category_id")) in allowed]
+            return JSONResponse(out)
         data = _db_list(state.db, kind)
         filtered = _filter_stream_list(state, data, kind)
         if kind == "vod":
