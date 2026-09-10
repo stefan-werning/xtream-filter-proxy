@@ -16,13 +16,21 @@ router = APIRouter()
 
 
 class JSONResponse(Response):
-    """Xtream panels serve player_api.php as ASCII-escaped JSON with an
-    explicit utf-8 charset. Some clients (Smarters Pro on Google TV) mangle
-    raw UTF-8 bytes under a charset-less `application/json` and then drop
-    the whole list on the first bad character -- German titles with
-    umlauts. Match the panel: ensure_ascii + charset."""
+    """Match a real Xtream panel's player_api.php response as closely as we
+    can: ASCII-escaped JSON body, `application/json` WITHOUT a charset param,
+    and the same CORS / cache headers the panel sends. Smarters Pro on
+    Google TV renders VOD from a direct panel connection but not from this
+    proxy -- the entry payload is byte-identical, so the envelope is the
+    only thing left that can differ."""
 
-    media_type = "application/json; charset=utf-8"
+    media_type = "application/json"
+
+    def __init__(self, content=None, **kw):
+        headers = kw.pop("headers", None) or {}
+        headers.setdefault("Access-Control-Allow-Origin", "*")
+        headers.setdefault("Pragma", "public")
+        headers.setdefault("Cache-Control", "public, must-revalidate, proxy-revalidate")
+        super().__init__(content, headers=headers, **kw)
 
     def render(self, content) -> bytes:
         return json.dumps(
