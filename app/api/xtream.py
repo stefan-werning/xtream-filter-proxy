@@ -260,6 +260,10 @@ async def player_api(request: Request):
         )
         qs = "&".join(f"{k}={v}" for k, v in params.items() if k not in ("username", "password"))
         state.db.log("info", f"[trace] {ip} {ua[:40]} action={action or '(login)'} {qs}")
+        if state.db.get_setting("debug_trace", "") == "headers":
+            hdrs = "; ".join(f"{k}={v}" for k, v in request.headers.items()
+                             if k.lower() not in ("authorization", "cookie"))
+            state.db.log("info", f"[trace-hdr] {action or '(login)'} <- {hdrs}")
 
     upstream_params = {k: v for k, v in params.items() if k not in ("username", "password")}
 
