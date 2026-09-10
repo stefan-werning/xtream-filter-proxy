@@ -94,6 +94,11 @@ class Database:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.execute("PRAGMA foreign_keys=ON")
+        # Wait up to 30s for a write lock rather than failing instantly with
+        # "database is locked". The sync commits in chunks so no single lock
+        # is held anywhere near that long, but a slow SD card under load can
+        # still make a competing writer wait a second or two.
+        conn.execute("PRAGMA busy_timeout=30000")
         return conn
 
     def _migrate(self) -> None:
