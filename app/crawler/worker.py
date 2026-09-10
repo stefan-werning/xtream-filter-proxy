@@ -316,10 +316,16 @@ class CrawlerWorker:
         await self._sleep_checking_stop(delay)
 
     async def _has_free_slot(self, cfg: dict, client: UpstreamClient) -> bool:
-        """Checks the account's connection slot -- only relevant right
-        before something that opens a real stream connection (ffprobe).
-        Plain player_api calls (get_vod_info, get_series_info, list
-        actions) don't count against active_cons, so they never need this.
+        """Checks whether the account has a connection slot free for
+        ffprobe (which opens a real stream connection). Only relevant right
+        before ffprobe -- plain player_api calls are cheap either way.
+
+        Note: on the providers seen so far, the very player_api call this
+        makes is itself counted in `active_cons` while it's in flight, so a
+        totally idle account still reports active_cons == 1. We therefore
+        compare `active_cons - 1` (other connections, i.e. actual streams)
+        against the limit. Without this, an account with max_connections
+        == 1 could never pass the check and ffprobe would never run.
         """
         try:
             user_info = await client.player_api({"action": ""})
@@ -334,8 +340,10 @@ class CrawlerWorker:
             max_conns = int(info.get("max_connections", 999))
         except (TypeError, ValueError):
             return True
+
+        other_connections = max(0, active - 1)  # minus this very check call
         reserve = cfg["crawler"].get("reserve_slots", 1)
-        return active < max_conns - reserve
+        return other_connections < max_conns - reserve
 
     async def _sleep_checking_stop(self, seconds: float) -> None:
         end = time.time() + seconds
@@ -402,8 +410,9 @@ class CrawlerWorker:
             )
         except Exception as e:
             logger.exception("probe failed for %s:%s", kind, item_id)
-            self._mark_probe(kind, item_id, "error", None, str(e))
-            self.db.log("info", f"{name}: error ({e})")
+            detail = str(e).strip() or type(e).__name__
+            self._mark_probe(kind, item_id, "error", None, detail)
+            self.db.log("info", f"{name}: error ({detail})")
             # _mark_probe resets an 'error' outcome back to 'pending' (with
             # backoff) rather than leaving 'error' set -- so, like the
             # deferred case above, this can't change what's visible either.
