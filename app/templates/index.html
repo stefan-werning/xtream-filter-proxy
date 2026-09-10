@@ -196,12 +196,12 @@
     <div id="dash-msg" class="hint" style="margin-top:8px;"></div>
   </div>
   <div class="card" id="stats-card">
-    <h3>Progress <span id="stats-loading" class="loading-note" hidden><span class="spinner"></span></span></h3>
+    <h3>Progress</h3>
     <div id="stats"></div>
     <p id="eta-line" class="hint"></p>
   </div>
   <div class="card" id="log-card">
-    <h3>Recent log <span id="log-loading" class="loading-note" hidden><span class="spinner"></span></span></h3>
+    <h3>Recent log</h3>
     <div id="log-legend" class="hint" style="margin-bottom:6px;"></div>
     <pre class="log" id="log"></pre>
   </div>
@@ -521,14 +521,8 @@ function windowHoursPerDay(cfg) {
 const STATUS_COLUMNS = ['ok', 'pending', 'deferred', 'skipped', 'no_audio_info', 'error'];
 
 async function refreshStats() {
-  $('stats-loading').hidden = false;
-  let j;
-  try {
-    const r = await fetch('/api/stats');
-    j = await r.json();
-  } finally {
-    $('stats-loading').hidden = true;
-  }
+  const r = await fetch('/api/stats');
+  const j = await r.json();
   let html = '<div class="progress-cards">';
   for (const kind of ['live', 'vod', 'series']) {
     const s = j[kind];
@@ -641,14 +635,8 @@ function renderLogLegend(logText) {
 }
 
 async function refreshLog() {
-  $('log-loading').hidden = false;
-  let j;
-  try {
-    const r = await fetch('/api/logs?limit=50');
-    j = await r.json();
-  } finally {
-    $('log-loading').hidden = true;
-  }
+  const r = await fetch('/api/logs?limit=50');
+  const j = await r.json();
   const text = j.map(l => `[${new Date(l.ts*1000).toLocaleString()}] ${l.level}: ${l.message}`).join('\n');
   $('log').textContent = text;
   renderLogLegend(text);
