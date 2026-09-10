@@ -523,12 +523,18 @@ function windowHoursPerDay(cfg) {
 
 const STATUS_COLUMNS = ['ok', 'pending', 'deferred', 'skipped', 'no_audio_info', 'error'];
 
-async function refreshStats() {
-  const r = await fetch('/api/stats');
-  const j = await r.json();
+// Last full /api/stats payload. renderStatsCards() draws from this;
+// stats_dirty SSE events patch its by_status counts in place so the
+// Progress badges move instantly without waiting on a refetch.
+let lastStats = null;
+
+function renderStatsCards() {
+  if (!lastStats) return;
+  const j = lastStats;
   let html = '<div class="progress-cards">';
   for (const kind of ['live', 'vod', 'series']) {
     const s = j[kind];
+    if (!s) continue;
     const hiddenCount = s.total - s.visible;
     let visibleLine = `${t('dash.visible')}: <b>${s.visible}</b>`;
     if (hiddenCount > 0) {
@@ -555,6 +561,32 @@ async function refreshStats() {
   }
   html += '</div>';
   $('stats').innerHTML = html;
+  restoreOpenPopover();
+}
+
+// Patch just the by_status counts from a stats_dirty event carrying live
+// per-kind counts, and redraw. Cheap, no network.
+function applyLiveCounts(counts) {
+  if (!lastStats || !counts) return;
+  for (const kind of Object.keys(counts)) {
+    if (lastStats[kind]) lastStats[kind].by_status = counts[kind];
+  }
+  renderStatsCards();
+}
+
+let statsFetchInFlight = false;
+async function refreshStats() {
+  if (statsFetchInFlight) return;   // don't stack concurrent /api/stats calls
+  statsFetchInFlight = true;
+  let j;
+  try {
+    const r = await fetch('/api/stats');
+    j = await r.json();
+  } finally {
+    statsFetchInFlight = false;
+  }
+  lastStats = j;
+  renderStatsCards();
 
   const eta = j.eta;
   if (!eta || eta.pending_count === 0) {
@@ -1035,15 +1067,48 @@ function stopPolling() {
   clearTimeout(pollTimer);
 }
 
-// Coalesce stats_dirty bursts: the crawler can bump data_version several
-// times in a few seconds, but /api/stats is the expensive call.
-let statsDirtyTimer = null;
-function scheduleStatsRefresh() {
-  if (statsDirtyTimer) return;
-  statsDirtyTimer = setTimeout(() => {
-    statsDirtyTimer = null;
-    if (!document.hidden && $('dashboard').classList.contains('active')) refreshStats();
-  }, 1500);
+// A stats_dirty event carrying `counts` lets us patch the Progress badges
+// immediately (no network). We still refetch /api/stats occasionally for
+// the parts not in the event -- visible / hidden_breakdown / ETA -- but
+// heavily rate-limited, since those move slowly.
+let statsFullRefreshTimer = null;
+let statsFullRefreshAt = 0;      // timestamp the pending refresh will fire at
+let statsFullRefreshDue = false;
+const STATS_FULL_REFRESH_MS = 15000;
+
+function onStatsDirty(data) {
+  const onDashboard = !document.hidden && $('dashboard').classList.contains('active');
+  if (data && data.counts) {
+    // Routine crawl progress: patch badges from the event, full refetch
+    // only occasionally for visible/hidden/ETA.
+    if (onDashboard) applyLiveCounts(data.counts);
+    scheduleFullStatsRefresh(STATS_FULL_REFRESH_MS);
+  } else {
+    // No counts = a structural change (sync finished, reset, reprobe,
+    // config/category edit). Refetch soon rather than in 15s.
+    scheduleFullStatsRefresh(1000);
+  }
+}
+
+function scheduleFullStatsRefresh(delay) {
+  statsFullRefreshDue = true;
+  const fireAt = Date.now() + delay;
+  if (statsFullRefreshTimer) {
+    if (fireAt >= statsFullRefreshAt) return;   // already scheduled sooner
+    clearTimeout(statsFullRefreshTimer);
+  }
+  statsFullRefreshAt = fireAt;
+  const run = () => {
+    statsFullRefreshTimer = null;
+    if (!statsFullRefreshDue) return;
+    statsFullRefreshDue = false;
+    if (!document.hidden && $('dashboard').classList.contains('active')) {
+      refreshStats().finally(() => {
+        if (statsFullRefreshDue) scheduleFullStatsRefresh(STATS_FULL_REFRESH_MS);
+      });
+    }
+  };
+  statsFullRefreshTimer = setTimeout(run, delay);
 }
 
 let es = null;
@@ -1075,7 +1140,11 @@ function connectSSE() {
     try { appendLogLine(JSON.parse(ev.data)); } catch (e) {}
   });
 
-  es.addEventListener('stats_dirty', () => scheduleStatsRefresh());
+  es.addEventListener('stats_dirty', (ev) => {
+    let data = null;
+    try { data = JSON.parse(ev.data); } catch (e) {}
+    onStatsDirty(data);
+  });
 
   es.addEventListener('error', () => {
     // EventSource retries on its own, but if it's really gone we want the

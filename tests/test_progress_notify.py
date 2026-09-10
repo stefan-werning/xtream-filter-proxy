@@ -47,9 +47,10 @@ async def _drain(q):
 
 
 @pytest.mark.asyncio
-async def test_deferred_outcome_emits_stats_dirty(tmp_path):
+async def test_deferred_outcome_emits_stats_dirty_with_counts(tmp_path):
     worker, db = make_worker(tmp_path)
     insert_item_and_probe(db, "series", "s1")
+    insert_item_and_probe(db, "series", "s2")  # stays pending
     broker.bind_loop(asyncio.get_running_loop())
     q = broker.subscribe()
     try:
@@ -60,7 +61,12 @@ async def test_deferred_outcome_emits_stats_dirty(tmp_path):
         await worker._probe_item({}, client=None, item={"kind": "series", "item_id": "s1"})
 
         events = await _drain(q)
-        assert any(e["type"] == "stats_dirty" for e in events)
+        dirty = [e for e in events if e["type"] == "stats_dirty"]
+        assert dirty, "no stats_dirty emitted"
+        counts = dirty[-1]["data"]["counts"]
+        # s1 -> deferred, s2 -> still pending
+        assert counts["series"].get("deferred") == 1
+        assert counts["series"].get("pending") == 1
     finally:
         broker.unsubscribe(q)
 

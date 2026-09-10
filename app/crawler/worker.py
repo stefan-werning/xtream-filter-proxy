@@ -114,11 +114,25 @@ class CrawlerWorker:
             data_version.bump()
             self._last_cache_invalidation_ts = now
 
+    def _by_status_snapshot(self) -> dict[str, dict[str, int]]:
+        """Current per-kind probe_state counts, same shape as /api/stats'
+        by_status. Cheap: one indexed GROUP BY per vod/series kind."""
+        out: dict[str, dict[str, int]] = {}
+        for kind in ("vod", "series"):
+            rows = self.db.conn.execute(
+                "SELECT status, COUNT(*) c FROM probe_state WHERE kind = ? GROUP BY status",
+                (kind,),
+            ).fetchall()
+            out[kind] = {r["status"]: r["c"] for r in rows}
+        return out
+
     def _notify_progress_throttled(self, min_interval: float = 2.0) -> None:
-        """Nudge the dashboard to refetch /api/stats after a probe_state
-        status change that the by-status counts should reflect (deferred,
-        error, ok, no_audio_info) but that doesn't change the visible set,
-        so _invalidate_cache_throttled / data_version wouldn't fire.
+        """Push updated by-status counts to the dashboard after a probe_state
+        status change (deferred, error, ok, no_audio_info). These don't
+        change the visible set, so _invalidate_cache_throttled /
+        data_version wouldn't fire -- and even when they do, that path is
+        throttled to 3s. The counts ride along in the event so the client
+        patches its Progress badges directly, no /api/stats refetch needed.
         Throttled so a burst of fast API-only probes doesn't spam events.
         """
         now = time.time()
@@ -127,7 +141,7 @@ class CrawlerWorker:
             try:
                 from app.core.events import broker
 
-                broker.publish("stats_dirty", {"reason": "progress"})
+                broker.publish("stats_dirty", {"counts": self._by_status_snapshot()})
             except Exception:
                 pass
 
