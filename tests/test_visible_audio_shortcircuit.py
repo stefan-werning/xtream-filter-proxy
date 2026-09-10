@@ -43,21 +43,28 @@ def add_track(db, kind, item_id, match_text):
         )
 
 
-def test_load_audio_info_only_returns_probed_and_tracked_items(tmp_path):
-    """_load_audio_info now filters probed rows in SQL -- a 'pending' /
-    'deferred' item with no tracks must not appear at all, and a probed one
-    must show has_known_tracks only when it also has tracks.
+def test_load_audio_info_has_known_only_for_ok_with_tracks(tmp_path):
+    """has_known_tracks (= "confirmed, language-filterable") is True only
+    for an 'ok' item that also has stored tracks. A 'no_audio_info' item
+    with tracks (audio found, no language tag) must NOT count as known --
+    it has to fall through to on_unknown.
     """
     db, _ = make_db_and_config(tmp_path)
     set_probe(db, "vod", "v1", "ok")
     add_track(db, "vod", "v1", "ger ac3 6ch")
-    set_probe(db, "vod", "v2", "no_audio_info")  # probed, no tracks
-    set_probe(db, "vod", "v3", "pending")        # not probed yet
+    set_probe(db, "vod", "v2", "no_audio_info")          # probed, no tracks
+    set_probe(db, "vod", "v3", "no_audio_info")          # probed, tracks but untagged
+    add_track(db, "vod", "v3", "stereo stereo aac 2ch")
+    set_probe(db, "vod", "v4", "pending")                # not probed
 
     info = _load_audio_info(db, "vod")
-    assert set(info) == {"v1", "v2"}
     assert info["v1"].has_known_tracks is True
-    assert info["v2"].has_known_tracks is False
+    # v3 appears (it has tracks) but is NOT "known"
+    assert info["v3"].has_known_tracks is False
+    assert info["v3"].match_texts == ["stereo stereo aac 2ch"]
+    # v2 (no tracks, not ok) and v4 (unprobed) need no entry
+    assert "v2" not in info
+    assert "v4" not in info
 
 
 def test_visible_skips_audio_stage_when_no_audio_rules(tmp_path):

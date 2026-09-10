@@ -477,6 +477,14 @@ class CrawlerWorker:
                 )
             return True
 
+        # A track carrying only a codec/channel label ("Stereo", "5.1") but
+        # no real spoken-language tag is audio we found but can't
+        # language-filter -- treat it as 'no_audio_info' (so on_unknown
+        # applies) rather than a confirmed 'ok' that the include filter
+        # would then silently drop. Still store the tracks so the Catalog
+        # shows what was seen.
+        has_usable_language = any(t.has_language for t in tracks)
+
         if tracks:
             with self.db.cursor() as cur:
                 cur.execute("DELETE FROM audio_tracks WHERE kind = ? AND item_id = ?", (kind, item_id))
@@ -486,12 +494,17 @@ class CrawlerWorker:
                         "codec, channels, match_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (kind, item_id, t.track_idx, t.language, t.title, t.codec, t.channels, t.match_text),
                     )
+
+        if tracks and has_usable_language:
             self._mark_probe(kind, item_id, "ok", source, None)
             langs = ", ".join(t.language or "?" for t in tracks)
             self.db.log("info", f"{name}: ok ({langs})")
         else:
             self._mark_probe(kind, item_id, "no_audio_info", source, None)
-            self.db.log("info", f"{name}: no_audio_info")
+            if tracks:
+                self.db.log("info", f"{name}: no_audio_info (tracks found but no language tag)")
+            else:
+                self.db.log("info", f"{name}: no_audio_info")
 
         # ok/no_audio_info are the only outcomes that can actually change
         # what's visible (they're the "known" statuses the language filter

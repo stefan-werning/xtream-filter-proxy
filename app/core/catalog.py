@@ -26,10 +26,12 @@ class ItemAudioInfo:
 def _load_audio_info(db: Database, kind: str) -> dict[str, ItemAudioInfo]:
     """kind in ('vod', 'series'). Returns item_id -> ItemAudioInfo.
 
-    Only items that are actually 'probed' (status in ok/no_audio_info/error)
-    matter here, so filter that in SQL (idx_probe_kind_status) instead of
-    scanning the whole probe_state table -- on a big catalog mid-crawl the
-    probed rows are a small fraction of the total.
+    `has_known_tracks` is True only for items whose probe finished 'ok' AND
+    that have stored audio tracks -- i.e. a confirmed, language-filterable
+    result. A 'no_audio_info' item may still have tracks stored (audio was
+    found but carried no language tag); those must fall through to
+    on_unknown, not be filtered against, so they're deliberately excluded
+    here.
     """
     tracks_by_item: dict[str, list[str]] = {}
     cur = db.conn.execute(
@@ -38,18 +40,17 @@ def _load_audio_info(db: Database, kind: str) -> dict[str, ItemAudioInfo]:
     for row in cur.fetchall():
         tracks_by_item.setdefault(row["item_id"], []).append(row["match_text"])
 
-    probed_items: set[str] = set(
+    ok_items: set[str] = set(
         row["item_id"] for row in db.conn.execute(
-            "SELECT item_id FROM probe_state WHERE kind = ? AND status IN ('ok', 'no_audio_info', 'error')",
-            (kind,),
+            "SELECT item_id FROM probe_state WHERE kind = ? AND status = 'ok'", (kind,)
         )
     )
 
     result: dict[str, ItemAudioInfo] = {}
-    all_items = set(tracks_by_item.keys()) | probed_items
+    all_items = set(tracks_by_item.keys()) | ok_items
     for item_id in all_items:
         texts = tracks_by_item.get(item_id, [])
-        has_known = item_id in probed_items and len(texts) > 0
+        has_known = item_id in ok_items and len(texts) > 0
         result[item_id] = ItemAudioInfo(match_texts=texts, has_known_tracks=has_known)
     return result
 

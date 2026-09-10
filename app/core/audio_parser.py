@@ -7,6 +7,20 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+# Values that show up in a stream's language/title tag but describe the
+# channel layout or mix, not a spoken language. If the only "language"
+# info for a track is one of these, the track has no real language tag.
+_NON_LANGUAGE_TAGS = {
+    "stereo", "mono", "dual", "dual mono", "surround", "surround 5.1",
+    "5.1", "7.1", "2.0", "1.0", "dolby", "dolby digital", "dolby surround",
+    "dts", "aac", "ac3", "eac3", "original", "und", "undetermined",
+    "audio", "sound", "default", "track", "commentary",
+}
+
+
+def _is_real_language(val: str) -> bool:
+    return val.strip().lower() not in _NON_LANGUAGE_TAGS
+
 
 @dataclass
 class AudioTrack:
@@ -15,6 +29,14 @@ class AudioTrack:
     title: str | None
     codec: str | None
     channels: int | None
+
+    @property
+    def has_language(self) -> bool:
+        """True only if this track carries a real spoken-language tag --
+        not just a codec/channel label ("Stereo", "5.1", "und", ...).
+        A track without this is audio we found but can't language-filter.
+        """
+        return bool(self.language) and _is_real_language(str(self.language))
 
     @property
     def match_text(self) -> str:
@@ -47,9 +69,16 @@ def _as_int(value) -> int | None:
 def _extract_language(entry: dict) -> str | None:
     tags = entry.get("tags")
     if isinstance(tags, dict):
-        for key in ("language", "LANGUAGE", "Language", "title", "TITLE"):
+        # A real `language` tag wins even if it's a layout word (rare).
+        for key in ("language", "LANGUAGE", "Language", "lang"):
             val = tags.get(key)
             if val:
+                return str(val)
+        # `title` is only a fallback, and only if it looks like a language
+        # rather than a channel-layout label ("Stereo", "5.1", ...).
+        for key in ("title", "TITLE", "Title"):
+            val = tags.get(key)
+            if val and _is_real_language(str(val)):
                 return str(val)
     for key in ("language", "Language", "LANGUAGE", "lang"):
         val = entry.get(key)
