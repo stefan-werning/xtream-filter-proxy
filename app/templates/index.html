@@ -140,16 +140,74 @@
   .progress-card-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .status-line { font-size: 14px; margin-bottom: 8px; }
   .hint { color: var(--hint-fg); font-size: 12px; }
-  .info-icon { color: var(--hint-fg); cursor: pointer; font-size: 13px; margin-left: 4px; }
-  .info-popover {
-    position: fixed; z-index: 1000;
+  /* --- info tooltip: pure CSS, anchored to its wrapper, no JS positioning --- */
+  .info { position: relative; display: inline-block; margin-left: 4px; }
+  .info > .info-icon {
+    color: var(--hint-fg); cursor: help; font-size: 13px;
+    border: none; background: none; padding: 0; min-height: 0; margin: 0;
+  }
+  .info > .info-bubble {
+    position: absolute; left: 0; top: 100%; margin-top: 4px; z-index: 1000;
     background: var(--card-bg); color: var(--fg); border: 1px solid var(--card-border);
     border-radius: 6px; padding: 10px 12px; font-size: 12.5px; line-height: 1.5;
-    width: max-content; max-width: min(90vw, 420px); box-shadow: 0 4px 16px rgba(0,0,0,0.2); white-space: pre-line;
+    width: max-content; max-width: min(80vw, 360px);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2); white-space: normal;
+    display: none;
   }
+  .info.open > .info-bubble { display: block; }
+  /* keep the bubble on-screen near the right edge */
+  .info.flip-right > .info-bubble { left: auto; right: 0; }
   .tab { display: none; }
   .tab.active { display: block; }
-  pre.log { max-height: 300px; overflow: auto; background: var(--log-bg); color: var(--log-fg); padding: 10px; border-radius: 4px; font-size: 12px; white-space: pre-wrap; word-break: break-word; }
+
+  /* --- log --- */
+  .log-box {
+    max-height: 320px; overflow-y: auto; background: var(--log-bg);
+    border-radius: 4px; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .log-line {
+    display: flex; gap: 8px; align-items: baseline;
+    padding: 3px 10px; border-bottom: 1px solid rgba(255,255,255,0.04);
+    color: var(--log-fg); white-space: nowrap;
+  }
+  .log-line:last-child { border-bottom: none; }
+  .log-line .log-ts { color: #6b7684; flex: 0 0 auto; }
+  .log-line .log-body { flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; }
+  .log-line.lvl-error { background: rgba(207,34,46,0.14); }
+  .log-line.lvl-error .log-body { color: #ff9492; }
+  .log-line.lvl-warning { background: rgba(210,153,34,0.12); }
+  .log-empty { padding: 10px; color: var(--log-fg); opacity: 0.6; font-size: 12px; }
+
+  /* --- toast (save/error feedback) --- */
+  #toast-host { position: fixed; left: 0; right: 0; bottom: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; z-index: 2000; pointer-events: none; }
+  .toast {
+    pointer-events: auto; max-width: 92vw;
+    background: var(--card-bg); color: var(--fg); border: 1px solid var(--card-border);
+    border-left: 4px solid var(--btn-bg);
+    border-radius: 6px; padding: 10px 14px; font-size: 13px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.25);
+    animation: toast-in 0.18s ease-out;
+  }
+  .toast.ok { border-left-color: var(--badge-ok-fg); }
+  .toast.err { border-left-color: var(--btn-danger-bg); }
+  @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
+
+  /* --- inline confirm --- */
+  .confirm-inline {
+    display: inline-flex; gap: 6px; align-items: center; flex-wrap: wrap;
+    padding: 8px 10px; border: 1px solid var(--btn-danger-bg); border-radius: 6px;
+    font-size: 13px; color: var(--fg); background: var(--card-bg);
+  }
+
+  /* --- field hint (settings) --- */
+  .field-hint { font-size: 11px; color: var(--hint-fg); margin-top: 3px; line-height: 1.4; }
+  details.adv { margin-top: 4px; }
+  details.adv > summary { cursor: pointer; font-size: 13px; color: var(--label-fg); padding: 4px 0; }
+
+  /* --- skeleton --- */
+  .skeleton { border-radius: 4px; background: linear-gradient(90deg, var(--card-border) 25%, var(--row-border) 37%, var(--card-border) 63%); background-size: 400% 100%; animation: sk 1.4s ease infinite; }
+  @keyframes sk { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
+  .skeleton-line { height: 12px; margin: 6px 0; }
   details.del-category { border: 1px solid var(--card-border); border-radius: 4px; margin-bottom: 6px; padding: 8px 10px; }
   details.del-category summary { cursor: pointer; font-weight: 600; }
   details.del-category .del-items { margin-top: 8px; max-height: 300px; overflow-y: auto; }
@@ -180,6 +238,7 @@
     <a data-tab="delivered">Delivered List</a>
   </nav>
 </header>
+<div id="toast-host"></div>
 <main>
 
 <section id="dashboard" class="tab active">
@@ -193,7 +252,6 @@
       <button id="btn-retry-errors" class="ghost">Retry failed probes</button>
       <button id="btn-reset" class="danger">Reset all probes</button>
     </div>
-    <div id="dash-msg" class="hint" style="margin-top:8px;"></div>
   </div>
   <div class="card" id="stats-card">
     <h3>Progress</h3>
@@ -203,29 +261,44 @@
   <div class="card" id="log-card">
     <h3>Recent log</h3>
     <div id="log-legend" class="hint" style="margin-bottom:6px;"></div>
-    <pre class="log" id="log"></pre>
+    <div class="log-box" id="log"></div>
   </div>
 </section>
 
 <section id="settings" class="tab">
   <div class="card">
     <h3>Upstream</h3>
+    <p class="hint">Your real Xtream-Codes provider — the proxy authenticates here with these credentials.</p>
     <div class="row">
-      <div class="col"><label>Base URL</label><input id="cfg-base-url"></div>
+      <div class="col"><label>Base URL</label><input id="cfg-base-url" placeholder="http://provider.example:8080">
+        <div class="field-hint">The provider's portal URL, no trailing slash.</div></div>
       <div class="col"><label>Username</label><input id="cfg-username"></div>
-      <div class="col"><label>Password</label><input id="cfg-password" type="password" placeholder="leave blank to keep"></div>
+      <div class="col"><label>Password</label><input id="cfg-password" type="password" placeholder="leave blank to keep">
+        <div class="field-hint">Only send a value to change it.</div></div>
     </div>
   </div>
   <div class="card">
     <h3>Crawler</h3>
     <div class="row">
-      <div class="col"><label>request_delay_seconds</label><input id="cfg-delay"></div>
-      <div class="col"><label>reserve_slots</label><input id="cfg-reserve"></div>
-      <div class="col"><label>sync_interval_minutes</label><input id="cfg-sync-interval"></div>
-      <div class="col"><label>ffprobe enabled</label>
+      <div class="col"><label>ffprobe fallback</label>
         <select id="cfg-ffprobe"><option value="false">off</option><option value="true">on</option></select>
+        <div class="field-hint">When the provider API doesn't report audio tracks, open the stream and read them directly. Accurate but uses a connection slot per check.</div>
+      </div>
+      <div class="col"><label>Full re-sync every (minutes)</label><input id="cfg-sync-interval" type="number" min="10">
+        <div class="field-hint">How often to refresh the whole catalog from the provider. 360 (6h) is plenty.</div>
       </div>
     </div>
+    <details class="adv">
+      <summary>Advanced timing</summary>
+      <div class="row">
+        <div class="col"><label>Delay between requests (seconds)</label><input id="cfg-delay" type="number" min="0" step="0.5">
+          <div class="field-hint">Pause between crawler requests, to be gentle on the provider. 1 is fine.</div>
+        </div>
+        <div class="col"><label>Reserved connection slots</label><input id="cfg-reserve" type="number" min="0">
+          <div class="field-hint">Keep this many of the account's connections free for your live viewing. If your account allows only 1 connection, set 0 and expect the crawler to skip ffprobe while you watch.</div>
+        </div>
+      </div>
+    </details>
   </div>
   <div class="card">
     <h3>Crawl schedule</h3>
@@ -277,7 +350,6 @@
     </div>
   </div>
   <button id="btn-save-settings">Save settings</button>
-  <span id="settings-msg" class="hint"></span>
   <p class="hint">After changing filters, refresh the playlist inside your client (Smarters Pro, TiviMate, …) — it caches the catalog locally.</p>
 </section>
 
@@ -419,10 +491,13 @@ const I18N = {
     'js.syncing': 'Syncing…', 'js.confirmReset': 'Reset all probe states?', 'js.pass': 'pass',
     'js.loading': 'Loading…',
     'js.passedSample': 'Passed (sample)', 'js.filteredSample': 'Filtered out (sample)',
-    'js.confirmRetryErrors': 'Retry all failed probes? They will be set back to pending.',
+    'js.confirmRetryErrors': 'Retry all failed probes?',
     'js.retryErrorsNone': 'No failed probes to retry.',
     'js.retryErrorsDone': 'probe(s) reset to pending.',
+    'js.resetDone': 'All probe states reset.',
+    'js.syncStarted': 'Full sync started.',
     'js.chooseType': 'Choose a type above to load its data.',
+    'js.loadError': 'Could not load — check the connection and try again.',
     'status.running': 'running', 'status.paused': 'paused', 'status.outside_window': 'outside window',
     'status.waiting_for_slot': 'waiting for connection slot', 'status.idle': 'idle',
     'status.syncing': 'syncing with provider',
@@ -471,6 +546,39 @@ document.querySelectorAll('nav a').forEach(a => a.addEventListener('click', () =
 
 function linesToArr(s) { return s.split('\n').map(x => x.trim()).filter(Boolean); }
 function arrToLines(a) { return (a || []).join('\n'); }
+
+// --- toast: transient feedback for save/error, replaces stray hint text ---
+function toast(msg, kind) {
+  const host = $('toast-host');
+  if (!host) return;
+  const el = document.createElement('div');
+  el.className = 'toast' + (kind ? ' ' + kind : '');
+  el.textContent = msg;
+  host.appendChild(el);
+  setTimeout(() => {
+    el.style.transition = 'opacity 0.3s';
+    el.style.opacity = '0';
+    setTimeout(() => el.remove(), 300);
+  }, kind === 'err' ? 6000 : 3000);
+}
+
+// --- inline confirm: swap a button for a "Really? [Yes] [Cancel]" prompt ---
+// onConfirm runs if the user clicks Yes. Restores the original button either way.
+function confirmInline(btn, question, onConfirm) {
+  if (btn.dataset.confirming) return;
+  btn.dataset.confirming = '1';
+  const holder = document.createElement('span');
+  holder.className = 'confirm-inline';
+  holder.innerHTML =
+    `<span>${escHtml(question)}</span>` +
+    `<button type="button" class="danger" data-yes style="min-height:32px;padding:6px 12px;margin:0;">Yes</button>` +
+    `<button type="button" class="secondary" data-no style="min-height:32px;padding:6px 12px;margin:0;">Cancel</button>`;
+  btn.style.display = 'none';
+  btn.after(holder);
+  const cleanup = () => { holder.remove(); btn.style.display = ''; delete btn.dataset.confirming; };
+  holder.querySelector('[data-yes]').onclick = () => { cleanup(); onConfirm(); };
+  holder.querySelector('[data-no]').onclick = cleanup;
+}
 
 function applyStatus(j) {
   const statusLabel = t('status.' + j.status) || j.status;
@@ -610,93 +718,116 @@ async function refreshStats() {
   restoreOpenPopover();
 }
 
-let openPopoverId = null;
-
-function infoIcon(id, detail) {
-  return `<span class="info-icon" data-popover-id="${id}" data-detail="${detail.replace(/"/g, '&quot;')}">ⓘ</span>`;
+function escHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 }
+
+// A self-contained info tooltip: <span class="info"> wraps the ⓘ trigger
+// and its bubble, so it scrolls/positions with its context automatically
+// and there's nothing to reposition on scroll or resize.
+function infoIcon(id, detail) {
+  const html = escHtml(detail).replace(/\n/g, '<br>');
+  return `<span class="info" data-info-id="${escHtml(id)}">` +
+    `<button type="button" class="info-icon" aria-label="More info">ⓘ</button>` +
+    `<span class="info-bubble">${html}</span></span>`;
+}
+
+// Which info tooltip (if any) is open, so a re-render can restore it.
+let openInfoId = null;
 
 function restoreOpenPopover() {
-  if (!openPopoverId) return;
-  const icon = document.querySelector(`.info-icon[data-popover-id="${openPopoverId}"]`);
-  if (icon) showPopover(icon);
+  document.querySelectorAll('.info.open').forEach(el => el.classList.remove('open'));
+  if (!openInfoId) return;
+  const el = document.querySelector(`.info[data-info-id="${CSS.escape(openInfoId)}"]`);
+  if (el) openInfo(el);
 }
 
-function showPopover(icon) {
-  closePopover();
-  const bubble = document.createElement('div');
-  bubble.className = 'info-popover';
-  bubble.textContent = icon.dataset.detail;
-  document.body.appendChild(bubble);
-
-  const rect = icon.getBoundingClientRect();
-  const maxLeft = window.innerWidth - bubble.offsetWidth - 12;
-  bubble.style.top = `${rect.bottom + 4}px`;
-  bubble.style.left = `${Math.max(8, Math.min(rect.left, maxLeft))}px`;
-
-  openPopoverId = icon.dataset.popoverId;
+function openInfo(el) {
+  document.querySelectorAll('.info.open').forEach(x => { if (x !== el) x.classList.remove('open'); });
+  el.classList.add('open');
+  openInfoId = el.dataset.infoId;
+  // Flip to right-aligned if the bubble would overflow the viewport.
+  el.classList.remove('flip-right');
+  const b = el.querySelector('.info-bubble');
+  if (b && b.getBoundingClientRect().right > window.innerWidth - 8) {
+    el.classList.add('flip-right');
+  }
 }
 
-function closePopover() {
-  document.querySelectorAll('.info-popover').forEach(el => el.remove());
-  openPopoverId = null;
+function closeInfo() {
+  document.querySelectorAll('.info.open').forEach(el => el.classList.remove('open'));
+  openInfoId = null;
 }
 
 document.addEventListener('click', (e) => {
-  const icon = e.target.closest('.info-icon');
-  if (icon) {
+  const trigger = e.target.closest('.info > .info-icon');
+  if (trigger) {
     e.stopPropagation();
-    if (openPopoverId === icon.dataset.popoverId) {
-      closePopover();
-    } else {
-      showPopover(icon);
-    }
+    const el = trigger.parentElement;
+    if (el.classList.contains('open')) closeInfo();
+    else openInfo(el);
     return;
   }
-  if (!e.target.closest('.info-popover')) {
-    closePopover();
-  }
+  if (!e.target.closest('.info-bubble')) closeInfo();
 });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeInfo(); });
 
 const LOG_TERMS = ['deferred', 'no_audio_info', 'error', 'skipped'];
+const LOG_MAX_LINES = 50;
+let logRows = [];   // newest-first, each {ts, level, message}
 
-function renderLogLegend(logText) {
-  const present = LOG_TERMS.filter(term => logText.includes(term));
+function renderLogLegend() {
+  const joined = logRows.map(r => r.message + ' ' + r.level).join(' ');
+  const present = LOG_TERMS.filter(term => joined.includes(term));
   const legend = $('log-legend');
   if (!present.length) { legend.innerHTML = ''; return; }
   legend.innerHTML = t('log.legendIntro') + ' ' + present
-    .map(term => `<span class="info-icon" data-popover-id="log-${term}" data-detail="${t('log.explain.' + term).replace(/"/g, '&quot;')}">${term} ⓘ</span>`)
-    .join('&nbsp;&nbsp;');
+    .map(term => `${term} ${infoIcon('log-' + term, t('log.explain.' + term))}`)
+    .join('&nbsp;&nbsp;&nbsp;');
 }
 
-const LOG_MAX_LINES = 50;
+function fmtLogTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
 
-function logLine(l) {
-  return `[${new Date(l.ts * 1000).toLocaleString()}] ${l.level}: ${l.message}`;
+function logRowHtml(r) {
+  // Probe failures are logged at level "info" as "<title>: error (...)".
+  // Treat those as errors for colouring too.
+  let cls = '';
+  if (r.level === 'error' || /: error \(/.test(r.message)) cls = ' lvl-error';
+  else if (r.level === 'warning') cls = ' lvl-warning';
+  return `<div class="log-line${cls}" title="${escHtml(r.message)}">` +
+    `<span class="log-ts">${fmtLogTime(r.ts)}</span>` +
+    `<span class="log-body">${escHtml(r.message)}</span></div>`;
+}
+
+function renderLog() {
+  const el = $('log');
+  if (!logRows.length) {
+    el.innerHTML = `<div class="log-empty">No log entries yet.</div>`;
+  } else {
+    el.innerHTML = logRows.map(logRowHtml).join('');
+  }
+  renderLogLegend();
 }
 
 async function refreshLog() {
   const r = await fetch('/api/logs?limit=' + LOG_MAX_LINES);
-  const j = await r.json();
-  // API returns newest-first; keep that order so the newest line is at the top.
-  const text = j.map(logLine).join('\n');
+  const j = await r.json();   // newest-first
+  logRows = j.map(l => ({ ts: l.ts, level: l.level, message: l.message }));
   const el = $('log');
-  el.textContent = text;
+  renderLog();
   el.scrollTop = 0;
-  renderLogLegend(text);
 }
 
-// Prepend a single new line pushed over SSE, keeping the box capped and
-// scrolling back to the top if the user was already there.
+// Prepend a single new line pushed over SSE.
 function appendLogLine(l) {
   const el = $('log');
   const atTop = el.scrollTop < 24;
-  let lines = el.textContent ? el.textContent.split('\n') : [];
-  lines.unshift(logLine(l));
-  if (lines.length > LOG_MAX_LINES) lines = lines.slice(0, LOG_MAX_LINES);
-  const text = lines.join('\n');
-  el.textContent = text;
-  renderLogLegend(text);
+  logRows.unshift({ ts: l.ts, level: l.level, message: l.message });
+  if (logRows.length > LOG_MAX_LINES) logRows = logRows.slice(0, LOG_MAX_LINES);
+  renderLog();
   if (atTop) el.scrollTop = 0;
 }
 
@@ -720,6 +851,9 @@ $('btn-sync').onclick = async () => {
   btn.textContent = t('js.syncing');
   try {
     await fetch('/api/crawler/sync-now', {method: 'POST'});
+    toast(t('js.syncStarted'), 'ok');
+  } catch (e) {
+    toast(t('js.error') + ' ' + e, 'err');
   } finally {
     btn.disabled = false;
     btn.textContent = original;
@@ -727,23 +861,36 @@ $('btn-sync').onclick = async () => {
     refreshLog();
   }
 };
-$('btn-retry-errors').onclick = async () => {
-  if (!confirm(t('js.confirmRetryErrors'))) return;
-  const btn = $('btn-retry-errors');
-  btn.disabled = true;
-  try {
-    const r = await fetch('/api/crawler/retry-errors', {method: 'POST'});
-    const j = await r.json();
-    $('dash-msg').textContent = j.reset > 0
-      ? `${j.reset} ${t('js.retryErrorsDone')}`
-      : t('js.retryErrorsNone');
-  } finally {
-    btn.disabled = false;
+$('btn-retry-errors').onclick = () => {
+  confirmInline($('btn-retry-errors'), t('js.confirmRetryErrors'), async () => {
+    const btn = $('btn-retry-errors');
+    btn.disabled = true;
+    try {
+      const r = await fetch('/api/crawler/retry-errors', {method: 'POST'});
+      const j = await r.json();
+      toast(j.reset > 0 ? `${j.reset} ${t('js.retryErrorsDone')}` : t('js.retryErrorsNone'),
+            j.reset > 0 ? 'ok' : null);
+    } catch (e) {
+      toast(t('js.error') + ' ' + e, 'err');
+    } finally {
+      btn.disabled = false;
+      refreshStats();
+      refreshLog();
+    }
+  });
+};
+$('btn-reset').onclick = () => {
+  confirmInline($('btn-reset'), t('js.confirmReset'), async () => {
+    try {
+      await fetch('/api/crawler/reset-probes', {method: 'POST'});
+      toast(t('js.resetDone'), 'ok');
+    } catch (e) {
+      toast(t('js.error') + ' ' + e, 'err');
+    }
     refreshStats();
     refreshLog();
-  }
+  });
 };
-$('btn-reset').onclick = () => { if (confirm(t('js.confirmReset'))) fetch('/api/crawler/reset-probes', {method: 'POST'}).then(() => { refreshStats(); refreshLog(); }); };
 
 async function loadSettings() {
   const r = await fetch('/api/config');
@@ -812,16 +959,25 @@ $('btn-save-settings').onclick = async () => {
   };
   const pw = $('cfg-password').value;
   if (pw) patch.upstream.password = pw;
-  const r = await fetch('/api/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(patch)});
-  const j = await r.json();
-  if (r.ok) {
-    $('settings-msg').textContent = t('js.saved');
-    await loadSettings();
-  } else if (r.status === 409) {
-    $('settings-msg').textContent = t('js.conflictSettings');
-    await loadSettings();
-  } else {
-    $('settings-msg').textContent = t('js.error') + ' ' + j.error;
+  const btn = $('btn-save-settings');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(patch)});
+    const j = await r.json();
+    if (r.ok) {
+      $('cfg-password').value = '';
+      toast(t('js.saved'), 'ok');
+      await loadSettings();
+    } else if (r.status === 409) {
+      toast(t('js.conflictSettings'), 'err');
+      await loadSettings();
+    } else {
+      toast(t('js.error') + ' ' + j.error, 'err');
+    }
+  } catch (e) {
+    toast(t('js.error') + ' ' + e, 'err');
+  } finally {
+    btn.disabled = false;
   }
 };
 
@@ -833,10 +989,21 @@ $('btn-preview').onclick = async () => {
     audio_include: linesToArr($('pv-audio-include').value),
     audio_exclude: linesToArr($('pv-audio-exclude').value),
   };
-  const r = await fetch('/api/preview', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
-  const j = await r.json();
-  if (!r.ok) { $('pv-result').innerHTML = '<p style="color:red">' + j.error + '</p>'; return; }
-  const fmt = (items) => items.map(i => `<li>${i.name} ${i.audio_tracks && i.audio_tracks.length ? '<span class="hint">[' + i.audio_tracks.join(', ') + ']</span>' : ''}</li>`).join('');
+  const btn = $('btn-preview');
+  btn.disabled = true;
+  $('pv-result').innerHTML = `<div class="loading-note"><span class="spinner"></span> ${t('js.loading')}</div>`;
+  let j;
+  try {
+    const r = await fetch('/api/preview', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    j = await r.json();
+    if (!r.ok) { $('pv-result').innerHTML = `<p class="hint">${escHtml(j.error || 'Error')}</p>`; return; }
+  } catch (e) {
+    $('pv-result').innerHTML = `<p class="hint">${t('js.loadError')}</p>`;
+    return;
+  } finally {
+    btn.disabled = false;
+  }
+  const fmt = (items) => items.map(i => `<li>${escHtml(i.name)} ${i.audio_tracks && i.audio_tracks.length ? '<span class="hint">[' + escHtml(i.audio_tracks.join(', ')) + ']</span>' : ''}</li>`).join('');
   $('pv-result').innerHTML = `
     <p>${j.passed_count} ${t('js.of')} ${j.total} ${t('js.pass')}.</p>
     <div class="row">
@@ -903,7 +1070,7 @@ async function loadCategories() {
     return;
   }
   tbody.innerHTML = `<tr><td colspan="3" class="loading-note"><span class="spinner"></span> ${t('js.loading')}</td></tr>`;
-  $('cats-msg').textContent = t('js.loading');
+  $('cats-msg').textContent = '';
   try {
     const r = await fetch('/api/categories?kind=' + kind);
     const j = await r.json();
@@ -911,7 +1078,8 @@ async function loadCategories() {
     excludedCategoryIds = new Set(allCategories.filter(c => c.excluded).map(c => c.category_id));
     renderCategories();
   } catch (e) {
-    $('cats-msg').textContent = t('js.error') + ' ' + e;
+    tbody.innerHTML = `<tr><td colspan="3" class="hint">${t('js.loadError')}</td></tr>`;
+    toast(t('js.error') + ' ' + e, 'err');
   }
 }
 
@@ -954,21 +1122,29 @@ $('btn-cats-select-none').onclick = () => {
 };
 $('btn-cats-save').onclick = async () => {
   const kind = $('cats-kind').value;
-  if (!kind) return;
+  if (!kind) { toast(t('js.chooseType'), 'err'); return; }
   const patch = {
     _version: cfgVersion,
     category_filters: { [kind]: { excluded_ids: Array.from(excludedCategoryIds) } },
   };
-  const r = await fetch('/api/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(patch)});
-  const j = await r.json();
-  if (r.ok) {
-    await loadSettings();
-    $('cats-msg').textContent = t('js.saved');
-  } else if (r.status === 409) {
-    $('cats-msg').textContent = t('js.conflictCats');
-    await loadSettings();
-  } else {
-    $('cats-msg').textContent = t('js.error') + ' ' + j.error;
+  const btn = $('btn-cats-save');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/config', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(patch)});
+    const j = await r.json();
+    if (r.ok) {
+      await loadSettings();
+      toast(t('js.saved'), 'ok');
+    } else if (r.status === 409) {
+      toast(t('js.conflictCats'), 'err');
+      await loadSettings();
+    } else {
+      toast(t('js.error') + ' ' + j.error, 'err');
+    }
+  } catch (e) {
+    toast(t('js.error') + ' ' + e, 'err');
+  } finally {
+    btn.disabled = false;
   }
 };
 
@@ -989,6 +1165,9 @@ async function loadDelivered() {
   try {
     const r = await fetch('/api/delivered/summary?kind=' + kind);
     j = await r.json();
+  } catch (e) {
+    container.innerHTML = `<p class="hint">${t('js.loadError')}</p>`;
+    return;
   } finally {
     $('del-loading').hidden = true;
   }
@@ -996,10 +1175,14 @@ async function loadDelivered() {
   $('del-category-count').textContent = j.categories.length;
   $('del-summary-line').hidden = false;
 
+  if (!j.categories.length) {
+    container.innerHTML = `<p class="hint">Nothing is delivered for this type with the current filters.</p>`;
+    return;
+  }
   container.innerHTML = j.categories.map(c => `
-    <details class="del-category" data-kind="${kind}" data-category-id="${c.category_id}">
-      <summary>${c.category_name} <span class="hint">(${c.item_count})</span></summary>
-      <div class="del-items hint">Loading…</div>
+    <details class="del-category" data-kind="${kind}" data-category-id="${escHtml(c.category_id)}">
+      <summary>${escHtml(c.category_name)} <span class="hint">(${c.item_count})</span></summary>
+      <div class="del-items"></div>
     </details>`).join('');
 
   document.querySelectorAll('.del-category').forEach(det => {
@@ -1007,11 +1190,19 @@ async function loadDelivered() {
       if (!det.open || det.dataset.loaded) return;
       det.dataset.loaded = '1';
       const itemsDiv = det.querySelector('.del-items');
-      const params = new URLSearchParams({kind: det.dataset.kind, category_id: det.dataset.categoryId});
-      const ir = await fetch('/api/delivered/items?' + params);
-      const ij = await ir.json();
-      itemsDiv.innerHTML = '<ul>' + ij.items.map(i => `<li>${i.name}</li>`).join('') + '</ul>';
-    }, {once: true});
+      itemsDiv.innerHTML = `<div class="loading-note"><span class="spinner"></span> ${t('js.loading')}</div>`;
+      try {
+        const params = new URLSearchParams({kind: det.dataset.kind, category_id: det.dataset.categoryId});
+        const ir = await fetch('/api/delivered/items?' + params);
+        const ij = await ir.json();
+        itemsDiv.innerHTML = ij.items.length
+          ? '<ul>' + ij.items.map(i => `<li>${escHtml(i.name)}</li>`).join('') + '</ul>'
+          : `<p class="hint">Empty.</p>`;
+      } catch (e) {
+        itemsDiv.innerHTML = `<p class="hint">${t('js.loadError')}</p>`;
+        det.dataset.loaded = '';   // allow retry on next open
+      }
+    });
   });
 }
 
