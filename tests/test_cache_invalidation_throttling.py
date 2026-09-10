@@ -52,8 +52,9 @@ async def test_deferred_outcome_does_not_bump_data_version(tmp_path):
 
 @pytest.mark.asyncio
 async def test_error_outcome_does_not_bump_data_version(tmp_path):
-    """_mark_probe resets an error back to 'pending', so an error outcome
-    can't change visibility either -- no cache rebuild needed.
+    """An error outcome keeps status 'error' (with a backoff next_try) but
+    doesn't produce audio tracks, so it can't change the visible set --
+    no cache rebuild needed.
     """
     worker, db = make_worker(tmp_path)
     insert_item_and_probe(db, "vod", "v1")
@@ -66,6 +67,11 @@ async def test_error_outcome_does_not_bump_data_version(tmp_path):
     await worker._probe_item({}, client=None, item={"kind": "vod", "item_id": "v1"})
 
     assert data_version.value == before
+    row = db.conn.execute(
+        "SELECT status, next_try FROM probe_state WHERE kind='vod' AND item_id='v1'"
+    ).fetchone()
+    assert row["status"] == "error"
+    assert row["next_try"] is not None  # scheduled for auto-retry
 
 
 @pytest.mark.asyncio

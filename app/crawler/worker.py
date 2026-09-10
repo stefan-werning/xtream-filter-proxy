@@ -366,7 +366,7 @@ class CrawlerWorker:
             cur = self.db.conn.execute(
                 "SELECT ps.item_id FROM probe_state ps "
                 "JOIN items i ON i.kind = ps.kind AND i.item_id = ps.item_id "
-                "WHERE ps.kind = ? AND ps.status IN ('pending', 'deferred') "
+                "WHERE ps.kind = ? AND ps.status IN ('pending', 'deferred', 'error') "
                 "AND (ps.next_try IS NULL OR ps.next_try <= ?) "
                 "AND i.removed_at IS NULL "
                 "ORDER BY (ps.status = 'pending') DESC, ps.priority DESC, ps.next_try ASC LIMIT 1",
@@ -402,7 +402,11 @@ class CrawlerWorker:
         row = self.db.conn.execute(
             "SELECT status FROM probe_state WHERE kind = ? AND item_id = ?", (kind, item_id)
         ).fetchone()
-        allow_ffprobe = bool(row and row["status"] == "deferred")
+        # 'deferred' had its API-only attempt and is due for ffprobe.
+        # 'error' already got past the deferral once (it failed *during*
+        # ffprobe / a later step), so retrying it should allow ffprobe too
+        # rather than sending it back through another deferral cycle.
+        allow_ffprobe = bool(row and row["status"] in ("deferred", "error"))
 
         try:
             tracks, source, blocked, needs_ffprobe_retry = await self._fetch_tracks(
@@ -657,9 +661,12 @@ class CrawlerWorker:
             attempts = (row["attempts"] if row else 0) + 1
             next_try = None
             if status == "error":
+                # Keep the 'error' status (so the Catalog and "Retry failed
+                # probes" can see it) but schedule an automatic retry via
+                # next_try -- _next_pending_item picks up due 'error' rows
+                # just like 'pending' ones.
                 backoff = min(3600, 60 * (2 ** min(attempts, 6)))
                 next_try = now + backoff
-                status = "pending"
             cur.execute(
                 "UPDATE probe_state SET status = ?, source = ?, attempts = ?, last_try = ?, "
                 "next_try = ?, error = ?, priority = 0 WHERE kind = ? AND item_id = ?",
