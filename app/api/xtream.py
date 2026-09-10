@@ -105,6 +105,36 @@ def _as_float(v):
         return 0.0
 
 
+_STRICT_VOD_KEYS = (
+    "num", "name", "stream_type", "stream_id", "stream_icon",
+    "rating", "rating_5based", "added", "category_id",
+    "container_extension", "custom_sid", "direct_source",
+)
+
+
+def _strict_vod_entry(e: dict) -> dict:
+    """Only the fields in the documented Xtream get_vod_streams shape, with
+    the documented types (custom_sid / direct_source as '' not null)."""
+    out = {k: e.get(k) for k in _STRICT_VOD_KEYS if k in e}
+    out.setdefault("num", 0)
+    out.setdefault("name", "")
+    out.setdefault("stream_type", "movie")
+    out.setdefault("category_id", "")
+    out.setdefault("container_extension", "mp4")
+    for k in ("custom_sid", "direct_source"):
+        if out.get(k) is None:
+            out[k] = ""
+    if out.get("stream_icon") is None:
+        out["stream_icon"] = ""
+    if out.get("rating") is None:
+        out["rating"] = ""
+    if out.get("rating_5based") is None:
+        out["rating_5based"] = 0.0
+    if out.get("added") is None:
+        out["added"] = ""
+    return out
+
+
 def _normalize_vod_types(entry: dict) -> None:
     """Xtream panels (this one's upstream included) are inconsistent about
     the JSON type of a few get_vod_streams fields -- across entries of the
@@ -193,6 +223,11 @@ async def player_api(request: Request):
         kind = STREAM_ACTIONS[action]
         data = _db_list(state.db, kind)
         filtered = _filter_stream_list(state, data, kind)
+        # Temporary: ?_shape=strict trims VOD entries to the minimal
+        # documented Xtream structure, to isolate which extra field a
+        # strict client chokes on.
+        if kind == "vod" and params.get("_shape") == "strict":
+            filtered = [_strict_vod_entry(e) for e in filtered]
         return JSONResponse(filtered)
 
     if action == "get_series":
