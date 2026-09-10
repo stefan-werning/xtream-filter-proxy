@@ -22,7 +22,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "request_delay_seconds": 1.0,
         "reserve_slots": 0,
         "slot_recheck_seconds": 60,
-        "ffprobe_cooldown_seconds": 45,
+        "ffprobe_cooldown_seconds": 15,
         "sync_interval_minutes": 360,
         "purge_after_days": 30,
         "log_max_age_days": 30,
@@ -108,6 +108,23 @@ def validate_config(cfg: dict[str, Any]) -> None:
             raise ConfigError(f"Invalid window start time: {win.get('start')}")
         if not re.match(r"^\d{2}:\d{2}$", win.get("end", "")):
             raise ConfigError(f"Invalid window end time: {win.get('end')}")
+
+    # Numeric crawler/ffprobe knobs must be non-negative finite numbers --
+    # catches an empty UI field arriving as NaN before it lands in the file.
+    _numeric = [
+        ("crawler", "request_delay_seconds", 0),
+        ("crawler", "reserve_slots", 0),
+        ("crawler", "sync_interval_minutes", 0),
+        ("crawler", "slot_recheck_seconds", 1),
+        ("crawler", "ffprobe_cooldown_seconds", 0),
+        ("ffprobe", "timeout_seconds", 1),
+    ]
+    for section, key, minimum in _numeric:
+        if key not in cfg.get(section, {}):
+            continue
+        val = cfg[section][key]
+        if not isinstance(val, (int, float)) or isinstance(val, bool) or val != val or val < minimum:
+            raise ConfigError(f"{section}.{key} must be a number >= {minimum} (got {val!r})")
 
 
 class ConfigManager:

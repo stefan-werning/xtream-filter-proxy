@@ -33,11 +33,12 @@ crawler:
   # actually in use.
   reserve_slots: 0
   slot_recheck_seconds: 60
-  # Minimum gap between two ffprobe runs. IPTV panels don't release a
-  # stream connection the instant ffprobe disconnects -- firing the next
-  # one too soon hits the connection limit (HTTP 458, seen as ffprobe
-  # exit 1). 45s is a safe default for single-connection accounts.
-  ffprobe_cooldown_seconds: 45
+  # Minimum gap between two ffprobe runs. IPTV panels don't always release
+  # a stream connection the instant ffprobe disconnects -- firing the next
+  # one too soon can hit the connection limit (HTTP 458, seen as ffprobe
+  # exit 1). Raise it if you still see those; lower it (even to 0) if your
+  # panel frees connections quickly.
+  ffprobe_cooldown_seconds: 15
   sync_interval_minutes: 360
   purge_after_days: 30
   log_max_age_days: 30

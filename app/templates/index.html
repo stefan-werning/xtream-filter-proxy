@@ -293,10 +293,21 @@
       <summary>Advanced timing</summary>
       <div class="row">
         <div class="col"><label>Delay between requests (seconds)</label><input id="cfg-delay" type="number" min="0" step="0.5">
-          <div class="field-hint">Pause between crawler requests, to be gentle on the provider. 1 is fine.</div>
+          <div class="field-hint">Pause after each probed item, to be gentle on the provider. 1 is fine.</div>
         </div>
         <div class="col"><label>Reserved connection slots</label><input id="cfg-reserve" type="number" min="0">
-          <div class="field-hint">Keep this many of the account's connections free for your live viewing. If your account allows only 1 connection, set 0 and expect the crawler to skip ffprobe while you watch.</div>
+          <div class="field-hint">Connections to keep free for your live viewing. On a single-connection account set 0 — otherwise the crawler can never run ffprobe.</div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="col"><label>ffprobe cooldown (seconds)</label><input id="cfg-ffprobe-cooldown" type="number" min="0">
+          <div class="field-hint">Minimum gap between two ffprobe runs, so the panel can release the previous stream connection. Raise if you see repeated "error (exit code 1)" in the log; lower (even to 0) if your panel frees connections fast.</div>
+        </div>
+        <div class="col"><label>ffprobe timeout (seconds)</label><input id="cfg-ffprobe-timeout" type="number" min="5">
+          <div class="field-hint">How long to wait for one ffprobe before giving up on that title.</div>
+        </div>
+        <div class="col"><label>Slot re-check (seconds)</label><input id="cfg-slot-recheck" type="number" min="1">
+          <div class="field-hint">When a title needs ffprobe but no slot is free, how long before it's offered again.</div>
         </div>
       </div>
     </details>
@@ -907,7 +918,10 @@ async function loadSettings() {
   $('cfg-delay').value = cfg.crawler.request_delay_seconds;
   $('cfg-reserve').value = cfg.crawler.reserve_slots;
   $('cfg-sync-interval').value = cfg.crawler.sync_interval_minutes;
+  $('cfg-ffprobe-cooldown').value = cfg.crawler.ffprobe_cooldown_seconds;
+  $('cfg-slot-recheck').value = cfg.crawler.slot_recheck_seconds;
   $('cfg-ffprobe').value = String(cfg.ffprobe.enabled);
+  $('cfg-ffprobe-timeout').value = cfg.ffprobe.timeout_seconds;
 
   $('cs-enabled').value = String(cfg.crawl_schedule.enabled);
   $('cs-timezone').value = cfg.crawl_schedule.timezone || 'Europe/Berlin';
@@ -933,15 +947,28 @@ async function loadSettings() {
 }
 
 $('btn-save-settings').onclick = async () => {
+  // Only include a numeric field in the patch if it holds a valid number;
+  // an empty / half-typed field must not overwrite the saved value with NaN.
+  const num = (id, parser) => {
+    const v = parser($(id).value);
+    return Number.isFinite(v) ? v : undefined;
+  };
+  const dropUndefined = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined));
+
   const patch = {
     _version: cfgVersion,
     upstream: { base_url: $('cfg-base-url').value, username: $('cfg-username').value },
-    crawler: {
-      request_delay_seconds: parseFloat($('cfg-delay').value),
-      reserve_slots: parseInt($('cfg-reserve').value),
-      sync_interval_minutes: parseInt($('cfg-sync-interval').value),
-    },
-    ffprobe: { enabled: $('cfg-ffprobe').value === 'true' },
+    crawler: dropUndefined({
+      request_delay_seconds: num('cfg-delay', parseFloat),
+      reserve_slots: num('cfg-reserve', parseInt),
+      sync_interval_minutes: num('cfg-sync-interval', parseInt),
+      ffprobe_cooldown_seconds: num('cfg-ffprobe-cooldown', parseInt),
+      slot_recheck_seconds: num('cfg-slot-recheck', parseInt),
+    }),
+    ffprobe: dropUndefined({
+      enabled: $('cfg-ffprobe').value === 'true',
+      timeout_seconds: num('cfg-ffprobe-timeout', parseInt),
+    }),
     crawl_schedule: {
       enabled: $('cs-enabled').value === 'true',
       timezone: $('cs-timezone').value || 'Europe/Berlin',

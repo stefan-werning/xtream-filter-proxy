@@ -207,8 +207,8 @@ the `--port` flag when running directly).
 | --- | --- |
 | `upstream` | Provider URL, credentials, timeout, user-agent |
 | `database` | SQLite file path |
-| `ffprobe` | Enable/disable the ffprobe fallback prober (on by default), its timeout and binary path |
-| `crawler` | Request pacing, `reserve_slots` (connections to keep free for your live viewing — **set 0 on a single-connection account** or ffprobe never runs), sync interval, retention (`purge_after_days`) and log rotation (`log_max_age_days`, `log_max_rows`) |
+| `ffprobe` | Enable/disable the ffprobe fallback prober (on by default), its `timeout_seconds`, binary path |
+| `crawler` | `request_delay_seconds`, `reserve_slots` (**set 0 on a single-connection account** or ffprobe never runs), `ffprobe_cooldown_seconds` (min gap between ffprobe runs so the panel can free the connection — raise if you see repeated `error (exit code 1)`), `slot_recheck_seconds`, `sync_interval_minutes`, retention (`purge_after_days`) and log rotation (`log_max_age_days`, `log_max_rows`) |
 | `crawl_schedule` | Day/time windows the crawler may run in (or `enabled: false` to run continuously) |
 | `title_filters` | Per-kind (`live`/`vod`/`series`) include/exclude regex lists, matched against the title (optionally also the category name) |
 | `category_filters` | Per-kind list of category IDs to hide entirely — easiest to manage from the Categories tab |
@@ -241,8 +241,10 @@ Reachable at `http://<host>:8080/`.
   (`/api/events`) — status changes and new log lines appear as the crawler
   produces them, with no polling. Falls back to polling if the SSE
   connection can't be established.
-- **Settings** — upstream, crawler tuning, crawl schedule, all filter regex
-  fields.
+- **Settings** — upstream, crawler tuning (incl. an "Advanced timing"
+  section for the ffprobe/slot knobs), crawl schedule, all filter regex
+  fields. Everything here writes straight back to `config.yaml`; the
+  retention/log-rotation knobs are file-only.
 - **Categories** — every category with its item count; uncheck one to hide
   it and stop the crawler wasting probes on it.
 - **Filter Preview** — try a title/audio regex combination against the live

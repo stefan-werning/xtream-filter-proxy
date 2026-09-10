@@ -337,7 +337,7 @@ class CrawlerWorker:
            `active_cons - 1` (other connections, i.e. real streams) against
            the limit, or a max_connections==1 account could never pass.
         """
-        cooldown = cfg["crawler"].get("ffprobe_cooldown_seconds", 45)
+        cooldown = cfg["crawler"].get("ffprobe_cooldown_seconds", 15)
         if time.time() - self._last_ffprobe_ts < cooldown:
             return False
 
