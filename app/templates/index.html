@@ -593,6 +593,24 @@ document.querySelectorAll('nav a').forEach(a => a.addEventListener('click', () =
 function linesToArr(s) { return s.split('\n').map(x => x.trim()).filter(Boolean); }
 function arrToLines(a) { return (a || []).join('\n'); }
 
+// Per-key fetch that aborts the previous in-flight request for the same
+// key. Used by the tab loaders (Catalog, Categories, Delivered, Preview)
+// so a fast second click / keystroke doesn't leave stale responses
+// racing the current one. A deliberate abort throws AbortError -- callers
+// catch it and simply do nothing.
+const _inflight = {};
+async function keyedFetch(key, input, init) {
+  if (_inflight[key]) _inflight[key].abort();
+  const ctrl = new AbortController();
+  _inflight[key] = ctrl;
+  try {
+    return await fetch(input, { ...(init || {}), signal: ctrl.signal });
+  } finally {
+    if (_inflight[key] === ctrl) delete _inflight[key];
+  }
+}
+function isAbort(e) { return e && e.name === 'AbortError'; }
+
 // --- toast: transient feedback for save/error, replaces stray hint text ---
 function toast(msg, kind) {
   const host = $('toast-host');
@@ -1056,10 +1074,11 @@ $('btn-preview').onclick = async () => {
   $('pv-result').innerHTML = `<div class="loading-note"><span class="spinner"></span> ${t('js.loading')}</div>`;
   let j;
   try {
-    const r = await fetch('/api/preview', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const r = await keyedFetch('preview', '/api/preview', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
     j = await r.json();
     if (!r.ok) { $('pv-result').innerHTML = `<p class="hint">${escHtml(j.error || 'Error')}</p>`; return; }
   } catch (e) {
+    if (isAbort(e)) return;
     $('pv-result').innerHTML = `<p class="hint">${t('js.loadError')}</p>`;
     return;
   } finally {
@@ -1088,9 +1107,10 @@ async function loadCatalogPage() {
   let j;
   try {
     const params = new URLSearchParams({ kind, q, status, page: catPage, page_size: CAT_PAGE_SIZE });
-    const r = await fetch('/api/catalog?' + params);
+    const r = await keyedFetch('catalog', '/api/catalog?' + params);
     j = await r.json();
   } catch (e) {
+    if (isAbort(e)) return;   // superseded by a newer search
     tbody.innerHTML = `<tr><td colspan="4" class="hint">${t('js.loadError')}</td></tr>`;
     return;
   }
@@ -1183,13 +1203,14 @@ async function loadCategories() {
   tbody.innerHTML = `<tr><td colspan="3" class="loading-note"><span class="spinner"></span> ${t('js.loading')}</td></tr>`;
   $('cats-msg').textContent = '';
   try {
-    const r = await fetch('/api/categories?kind=' + kind);
+    const r = await keyedFetch('categories', '/api/categories?kind=' + kind);
     const j = await r.json();
     allCategories = j.categories;
     categoryModes = {};
     for (const c of allCategories) categoryModes[c.category_id] = c.mode || 'filtered';
     renderCategories();
   } catch (e) {
+    if (isAbort(e)) return;
     tbody.innerHTML = `<tr><td colspan="3" class="hint">${t('js.loadError')}</td></tr>`;
     toast(t('js.error') + ' ' + e, 'err');
   }
@@ -1299,13 +1320,14 @@ async function loadDelivered() {
   container.innerHTML = '';
   let j;
   try {
-    const r = await fetch('/api/delivered/summary?kind=' + kind);
+    const r = await keyedFetch('delivered', '/api/delivered/summary?kind=' + kind);
     j = await r.json();
   } catch (e) {
+    if (isAbort(e)) return;
     container.innerHTML = `<p class="hint">${t('js.loadError')}</p>`;
     return;
   } finally {
-    $('del-loading').hidden = true;
+    if (!_inflight['delivered']) $('del-loading').hidden = true;
   }
   $('del-total-visible').textContent = j.total_visible;
   $('del-category-count').textContent = j.categories.length;
