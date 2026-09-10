@@ -104,6 +104,25 @@ class CrawlerWorker:
         invalidate_filter_cache()
         data_version.bump()
 
+    def retry_error_probes(self) -> int:
+        """Puts every probe currently in 'error' back to 'pending' so the
+        crawler picks them up again. Returns how many rows were reset.
+        Unlike reset_all_probes this leaves 'ok'/'no_audio_info'/'deferred'
+        results untouched -- it only retries the genuine failures.
+        """
+        now = int(time.time())
+        with self.db.cursor() as cur:
+            cur.execute(
+                "UPDATE probe_state SET status = 'pending', attempts = 0, next_try = ?, error = NULL "
+                "WHERE status = 'error'",
+                (now,),
+            )
+            count = cur.rowcount
+        if count:
+            invalidate_filter_cache()
+            data_version.bump()
+        return count
+
     def reprobe_item(self, kind: str, item_id: str) -> None:
         now = int(time.time())
         with self.db.cursor() as cur:
@@ -286,7 +305,7 @@ class CrawlerWorker:
         except Exception as e:
             logger.exception("probe failed for %s:%s", kind, item_id)
             self._mark_probe(kind, item_id, "error", None, str(e))
-            self.db.log("info", f"probe {kind}:{item_id} '{name}' -> error: {e}")
+            self.db.log("info", f"{name}: error ({e})")
             # _mark_probe resets an 'error' outcome back to 'pending' (with
             # backoff) rather than leaving 'error' set -- so, like the
             # deferred case above, this can't change what's visible either.
@@ -306,7 +325,7 @@ class CrawlerWorker:
                     "WHERE kind = ? AND item_id = ?",
                     (now, kind, item_id),
                 )
-            self.db.log("info", f"probe {kind}:{item_id} '{name}' -> deferred (api result needs ffprobe confirmation)")
+            self.db.log("info", f"{name}: deferred")
             # No cache invalidation here: 'deferred' isn't in the set of
             # "known" statuses compute_visible_for_kind checks (ok/
             # no_audio_info/error), so this transition can never change
@@ -341,10 +360,10 @@ class CrawlerWorker:
                     )
             self._mark_probe(kind, item_id, "ok", source, None)
             langs = ", ".join(t.language or "?" for t in tracks)
-            self.db.log("info", f"probe {kind}:{item_id} '{name}' -> ok via {source} ({langs})")
+            self.db.log("info", f"{name}: ok ({langs})")
         else:
             self._mark_probe(kind, item_id, "no_audio_info", source, None)
-            self.db.log("info", f"probe {kind}:{item_id} '{name}' -> no_audio_info via {source}")
+            self.db.log("info", f"{name}: no_audio_info")
 
         # ok/no_audio_info are the only outcomes that can actually change
         # what's visible (they're the "known" statuses the language filter

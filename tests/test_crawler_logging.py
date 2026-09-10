@@ -47,9 +47,8 @@ async def test_probe_ok_logs_title_and_languages(tmp_path):
     await worker._probe_item({}, client=None, item={"kind": "vod", "item_id": "v1"})
 
     msg = last_log_message(db)
-    assert "vod:v1" in msg
     assert "Die Hochzeits-Crasher" in msg
-    assert "ok via ffprobe" in msg
+    assert "ok" in msg
     assert "ger" in msg
 
 
@@ -65,9 +64,8 @@ async def test_probe_no_audio_info_logs_source(tmp_path):
     await worker._probe_item({}, client=None, item={"kind": "series", "item_id": "s1"})
 
     msg = last_log_message(db)
-    assert "series:s1" in msg
     assert "Some Show" in msg
-    assert "no_audio_info via api" in msg
+    assert "no_audio_info" in msg
 
 
 @pytest.mark.asyncio
@@ -82,7 +80,6 @@ async def test_probe_error_logs_exception(tmp_path):
     await worker._probe_item({}, client=None, item={"kind": "vod", "item_id": "v2"})
 
     msg = last_log_message(db)
-    assert "vod:v2" in msg
     assert "Broken Title" in msg
     assert "error" in msg
     assert "boom" in msg

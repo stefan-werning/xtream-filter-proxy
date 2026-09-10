@@ -63,6 +63,12 @@ async def crawler_reset_probes(request: Request):
     return JSONResponse({"ok": True})
 
 
+@router.post("/crawler/retry-errors")
+async def crawler_retry_errors(request: Request):
+    count = request.app.state.crawler.retry_error_probes()
+    return JSONResponse({"ok": True, "reset": count})
+
+
 @router.post("/crawler/reprobe")
 async def crawler_reprobe(request: Request, kind: str = Body(...), item_id: str = Body(...)):
     request.app.state.crawler.reprobe_item(kind, item_id)

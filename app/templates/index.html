@@ -106,7 +106,23 @@
   button { background: var(--btn-bg); color: var(--btn-fg); border: none; padding: 10px 14px; border-radius: 4px; cursor: pointer; font-size: 14px; margin: 0 8px 8px 0; min-height: 40px; }
   button.secondary { background: var(--btn-secondary-bg); }
   button.danger { background: var(--btn-danger-bg); }
-  button:disabled { opacity: 0.6; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--btn-bg); border: 1px solid var(--input-border); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .btn-row.spaced { margin-top: 12px; }
+  .btn-row button { margin: 0; }
+  .spinner {
+    display: inline-block; width: 13px; height: 13px; vertical-align: -2px;
+    border: 2px solid var(--hint-fg); border-top-color: transparent;
+    border-radius: 50%; animation: spin 0.7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading-note { color: var(--hint-fg); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
+  .card.is-loading { position: relative; }
+  .card.is-loading::after {
+    content: ""; position: absolute; inset: 0; border-radius: inherit;
+    background: var(--card-bg); opacity: 0.35;
+  }
   .table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 480px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--row-border); }
@@ -167,20 +183,26 @@
 <main>
 
 <section id="dashboard" class="tab active">
-  <div class="card">
+  <div class="card" id="dash-controls-card">
     <div class="status-line"><span>Crawler status:</span> <b id="crawler-status">-</b> <span id="current-item" class="hint"></span></div>
-    <button id="btn-pause">Pause</button>
-    <button id="btn-resume" class="secondary">Resume</button>
-    <button id="btn-sync" class="secondary">Sync now</button>
-    <button id="btn-reset" class="danger">Reset all probes</button>
+    <div class="btn-row">
+      <button id="btn-pause-toggle" class="secondary">Pause</button>
+      <button id="btn-sync" class="ghost">Sync now</button>
+    </div>
+    <div class="btn-row spaced">
+      <button id="btn-retry-errors" class="ghost">Retry failed probes</button>
+      <button id="btn-reset" class="danger">Reset all probes</button>
+    </div>
+    <div id="dash-msg" class="hint" style="margin-top:8px;"></div>
   </div>
-  <div class="card">
-    <h3>Progress</h3>
+  <div class="card" id="stats-card">
+    <h3>Progress <span id="stats-loading" class="loading-note" hidden><span class="spinner"></span></span></h3>
     <div id="stats"></div>
     <p id="eta-line" class="hint"></p>
   </div>
-  <div class="card">
-    <h3>Recent log</h3>
+  <div class="card" id="log-card">
+    <h3>Recent log <span id="log-loading" class="loading-note" hidden><span class="spinner"></span></span></h3>
+    <div id="log-legend" class="hint" style="margin-bottom:6px;"></div>
     <pre class="log" id="log"></pre>
   </div>
 </section>
@@ -264,11 +286,14 @@
     <p class="hint">Uncheck a category to hide all its titles from the filtered lists — and, for VOD/Series, skip probing those titles entirely so the crawler focuses on what you actually want to see.</p>
     <div class="row">
       <div class="col"><label>Type</label>
-        <select id="cats-kind"><option value="vod">VOD</option><option value="series">Series</option><option value="live">Live</option></select>
+        <select id="cats-kind">
+          <option value="" selected>— choose —</option>
+          <option value="vod">VOD</option><option value="series">Series</option><option value="live">Live</option>
+        </select>
       </div>
       <div class="col"><label>Search</label><input id="cats-q" placeholder="Filter by name..."></div>
     </div>
-    <div class="row">
+    <div class="btn-row spaced">
       <button id="btn-cats-select-all" class="secondary">Select all</button>
       <button id="btn-cats-select-none" class="secondary">Select none</button>
       <button id="btn-cats-save">Save selection</button>
@@ -332,10 +357,14 @@
     <p class="hint">This is exactly what IPTV Smarters receives right now for the selected type — items in excluded categories are already gone; title/audio filters have been applied.</p>
     <div class="row">
       <div class="col"><label>Type</label>
-        <select id="del-kind"><option value="vod">VOD</option><option value="series">Series</option><option value="live">Live</option></select>
+        <select id="del-kind">
+          <option value="" selected>— choose —</option>
+          <option value="vod">VOD</option><option value="series">Series</option><option value="live">Live</option>
+        </select>
       </div>
     </div>
-    <p><b id="del-total-visible">-</b> items across <b id="del-category-count">-</b> categories.</p>
+    <p id="del-summary-line" hidden><b id="del-total-visible">-</b> items across <b id="del-category-count">-</b> categories.</p>
+    <div id="del-loading" class="loading-note" hidden><span class="spinner"></span> <span id="del-loading-text">Loading…</span></div>
     <div id="del-categories"></div>
   </div>
 </section>
@@ -388,9 +417,18 @@ const I18N = {
     'js.syncing': 'Syncing…', 'js.confirmReset': 'Reset all probe states?', 'js.pass': 'pass',
     'js.loading': 'Loading…',
     'js.passedSample': 'Passed (sample)', 'js.filteredSample': 'Filtered out (sample)',
+    'js.confirmRetryErrors': 'Retry all failed probes? They will be set back to pending.',
+    'js.retryErrorsNone': 'No failed probes to retry.',
+    'js.retryErrorsDone': 'probe(s) reset to pending.',
+    'js.chooseType': 'Choose a type above to load its data.',
     'status.running': 'running', 'status.paused': 'paused', 'status.outside_window': 'outside window',
     'status.waiting_for_slot': 'waiting for connection slot', 'status.idle': 'idle',
     'status.syncing': 'syncing with provider',
+    'log.legendIntro': 'Status terms:',
+    'log.explain.deferred': 'deferred — the provider API returned audio info, but it looked incomplete, so the title is queued for an ffprobe re-check (which needs the single connection slot).',
+    'log.explain.no_audio_info': 'no_audio_info — neither the API nor ffprobe reported any audio track for this title.',
+    'log.explain.error': 'error — the probe failed (timeout, connection issue, or a broken stream). It will be retried automatically; use "Retry failed probes" to requeue them now.',
+    'log.explain.skipped': 'skipped — the title is in a category you unchecked, so the crawler is not probing it.',
   },
 };
 
@@ -432,6 +470,22 @@ async function refreshStatus() {
   const statusLabel = t('status.' + j.status) || j.status;
   $('crawler-status').textContent = statusLabel + (j.paused ? ` (${t('dash.pause').toLowerCase()})` : '');
   $('current-item').textContent = j.current_item ? ('— ' + j.current_item) : '';
+
+  // One toggle button that reflects the real state: "Pause" when the
+  // crawler is active, "Resume" when it's paused -- instead of two
+  // always-clickable buttons where one is a no-op.
+  const btn = $('btn-pause-toggle');
+  if (!btn.dataset.busy) {
+    if (j.paused) {
+      btn.textContent = t('dash.resume');
+      btn.className = 'secondary';
+      btn.dataset.action = 'resume';
+    } else {
+      btn.textContent = t('dash.pause');
+      btn.className = 'secondary';
+      btn.dataset.action = 'pause';
+    }
+  }
 }
 
 function formatDuration(seconds) {
@@ -459,8 +513,14 @@ function windowHoursPerDay(cfg) {
 const STATUS_COLUMNS = ['ok', 'pending', 'deferred', 'skipped', 'no_audio_info', 'error'];
 
 async function refreshStats() {
-  const r = await fetch('/api/stats');
-  const j = await r.json();
+  $('stats-loading').hidden = false;
+  let j;
+  try {
+    const r = await fetch('/api/stats');
+    j = await r.json();
+  } finally {
+    $('stats-loading').hidden = true;
+  }
   let html = '<div class="progress-cards">';
   for (const kind of ['live', 'vod', 'series']) {
     const s = j[kind];
@@ -561,14 +621,44 @@ document.addEventListener('click', (e) => {
   }
 });
 
-async function refreshLog() {
-  const r = await fetch('/api/logs?limit=50');
-  const j = await r.json();
-  $('log').textContent = j.map(l => `[${new Date(l.ts*1000).toLocaleString()}] ${l.level}: ${l.message}`).join('\n');
+const LOG_TERMS = ['deferred', 'no_audio_info', 'error', 'skipped'];
+
+function renderLogLegend(logText) {
+  const present = LOG_TERMS.filter(term => logText.includes(term));
+  const legend = $('log-legend');
+  if (!present.length) { legend.innerHTML = ''; return; }
+  legend.innerHTML = t('log.legendIntro') + ' ' + present
+    .map(term => `<span class="info-icon" data-popover-id="log-${term}" data-detail="${t('log.explain.' + term).replace(/"/g, '&quot;')}">${term} ⓘ</span>`)
+    .join('&nbsp;&nbsp;');
 }
 
-$('btn-pause').onclick = () => fetch('/api/crawler/pause', {method: 'POST'}).then(refreshStatus);
-$('btn-resume').onclick = () => fetch('/api/crawler/resume', {method: 'POST'}).then(refreshStatus);
+async function refreshLog() {
+  $('log-loading').hidden = false;
+  let j;
+  try {
+    const r = await fetch('/api/logs?limit=50');
+    j = await r.json();
+  } finally {
+    $('log-loading').hidden = true;
+  }
+  const text = j.map(l => `[${new Date(l.ts*1000).toLocaleString()}] ${l.level}: ${l.message}`).join('\n');
+  $('log').textContent = text;
+  renderLogLegend(text);
+}
+
+$('btn-pause-toggle').onclick = async () => {
+  const btn = $('btn-pause-toggle');
+  const action = btn.dataset.action || 'pause';
+  btn.dataset.busy = '1';
+  btn.disabled = true;
+  try {
+    await fetch('/api/crawler/' + action, {method: 'POST'});
+  } finally {
+    delete btn.dataset.busy;
+    btn.disabled = false;
+    await refreshStatus();
+  }
+};
 $('btn-sync').onclick = async () => {
   const btn = $('btn-sync');
   const original = btn.textContent;
@@ -583,7 +673,23 @@ $('btn-sync').onclick = async () => {
     refreshLog();
   }
 };
-$('btn-reset').onclick = () => { if (confirm(t('js.confirmReset'))) fetch('/api/crawler/reset-probes', {method: 'POST'}).then(refreshStats); };
+$('btn-retry-errors').onclick = async () => {
+  if (!confirm(t('js.confirmRetryErrors'))) return;
+  const btn = $('btn-retry-errors');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/crawler/retry-errors', {method: 'POST'});
+    const j = await r.json();
+    $('dash-msg').textContent = j.reset > 0
+      ? `${j.reset} ${t('js.retryErrorsDone')}`
+      : t('js.retryErrorsNone');
+  } finally {
+    btn.disabled = false;
+    refreshStats();
+    refreshLog();
+  }
+};
+$('btn-reset').onclick = () => { if (confirm(t('js.confirmReset'))) fetch('/api/crawler/reset-probes', {method: 'POST'}).then(() => { refreshStats(); refreshLog(); }); };
 
 async function loadSettings() {
   const r = await fetch('/api/config');
@@ -736,7 +842,13 @@ let excludedCategoryIds = new Set();
 async function loadCategories() {
   const kind = $('cats-kind').value;
   const tbody = document.querySelector('#cats-table tbody');
-  tbody.innerHTML = `<tr><td colspan="3" class="hint">${t('js.loading')}</td></tr>`;
+  if (!kind) {
+    allCategories = [];
+    tbody.innerHTML = `<tr><td colspan="3" class="hint">${t('js.chooseType')}</td></tr>`;
+    $('cats-msg').textContent = '';
+    return;
+  }
+  tbody.innerHTML = `<tr><td colspan="3" class="loading-note"><span class="spinner"></span> ${t('js.loading')}</td></tr>`;
   $('cats-msg').textContent = t('js.loading');
   try {
     const r = await fetch('/api/categories?kind=' + kind);
@@ -750,8 +862,12 @@ async function loadCategories() {
 }
 
 function renderCategories() {
-  const q = $('cats-q').value.toLowerCase();
   const tbody = document.querySelector('#cats-table tbody');
+  if (!$('cats-kind').value || allCategories.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="3" class="hint">${t('js.chooseType')}</td></tr>`;
+    return;
+  }
+  const q = $('cats-q').value.toLowerCase();
   const filtered = allCategories.filter(c => c.category_name.toLowerCase().includes(q));
   tbody.innerHTML = filtered.map(c => `
     <tr>
@@ -784,6 +900,7 @@ $('btn-cats-select-none').onclick = () => {
 };
 $('btn-cats-save').onclick = async () => {
   const kind = $('cats-kind').value;
+  if (!kind) return;
   const patch = {
     _version: cfgVersion,
     category_filters: { [kind]: { excluded_ids: Array.from(excludedCategoryIds) } },
@@ -801,18 +918,30 @@ $('btn-cats-save').onclick = async () => {
   }
 };
 
-document.querySelector('nav a[data-tab="categories"]').addEventListener('click', () => {
-  if (allCategories.length === 0) loadCategories();
-});
 
 async function loadDelivered() {
   const kind = $('del-kind').value;
-  const r = await fetch('/api/delivered/summary?kind=' + kind);
-  const j = await r.json();
+  const container = $('del-categories');
+  if (!kind) {
+    container.innerHTML = `<p class="hint">${t('js.chooseType')}</p>`;
+    $('del-summary-line').hidden = true;
+    $('del-loading').hidden = true;
+    return;
+  }
+  $('del-loading').hidden = false;
+  $('del-summary-line').hidden = true;
+  container.innerHTML = '';
+  let j;
+  try {
+    const r = await fetch('/api/delivered/summary?kind=' + kind);
+    j = await r.json();
+  } finally {
+    $('del-loading').hidden = true;
+  }
   $('del-total-visible').textContent = j.total_visible;
   $('del-category-count').textContent = j.categories.length;
+  $('del-summary-line').hidden = false;
 
-  const container = $('del-categories');
   container.innerHTML = j.categories.map(c => `
     <details class="del-category" data-kind="${kind}" data-category-id="${c.category_id}">
       <summary>${c.category_name} <span class="hint">(${c.item_count})</span></summary>
@@ -833,21 +962,23 @@ async function loadDelivered() {
 }
 
 $('del-kind').onchange = loadDelivered;
-document.querySelector('nav a[data-tab="delivered"]').addEventListener('click', () => {
-  loadDelivered();
-});
 
 loadSettings();
 
 // Self-scheduling poll loop instead of a fixed setInterval: on a slow host
 // (e.g. a Raspberry Pi under crawler load) a fixed interval keeps firing
 // even while the previous round's requests are still in flight, piling up
-// overlapping fetches. This waits for the current round to finish (success
-// or failure) before scheduling the next one 5s later.
+// overlapping fetches. This waits for the current round to finish before
+// scheduling the next one. The three requests run one after another rather
+// than in parallel so a weak CPU isn't hit with all three at once (which
+// made the whole page feel frozen); each has its own inline spinner so
+// you can see work is happening.
 let pollTimer = null;
 async function pollLoop() {
   try {
-    await Promise.all([refreshStatus(), refreshStats(), refreshLog()]);
+    await refreshStatus();
+    await refreshStats();
+    await refreshLog();
   } catch (e) {
     console.error('poll failed', e);
   } finally {
