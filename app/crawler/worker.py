@@ -187,6 +187,42 @@ class CrawlerWorker:
         invalidate_filter_cache()
         data_version.bump()
 
+    def reprobe_matching(self, kind: str, q: str, status: str) -> int:
+        """Re-probe every item of `kind` whose name matches `q` and whose
+        current probe status is `status`. Returns how many were requeued.
+        Used by the Catalog tab's bulk re-probe; `status` is mandatory
+        (the caller enforces it) so this can't be an accidental full reset.
+        """
+        now = int(time.time())
+        where = ["ps.kind = ?", "ps.status = ?"]
+        args: list = [kind, status]
+        if q:
+            where.append(
+                "ps.item_id IN (SELECT item_id FROM items WHERE kind = ? AND name LIKE ?)"
+            )
+            args.extend([kind, f"%{q}%"])
+        where_sql = " AND ".join(where)
+        with self.db.cursor() as cur:
+            ids = [
+                r["item_id"]
+                for r in cur.execute(
+                    f"SELECT ps.item_id FROM probe_state ps WHERE {where_sql}", args
+                ).fetchall()
+            ]
+            for item_id in ids:
+                cur.execute(
+                    "DELETE FROM audio_tracks WHERE kind = ? AND item_id = ?", (kind, item_id)
+                )
+                cur.execute(
+                    "UPDATE probe_state SET status='pending', attempts=0, next_try=?, priority=20, error=NULL "
+                    "WHERE kind = ? AND item_id = ?",
+                    (now, kind, item_id),
+                )
+        if ids:
+            invalidate_filter_cache()
+            data_version.bump()
+        return len(ids)
+
     # -- main loop --------------------------------------------------------
 
     def _set_status(self, status: str, current_item: str | None = None) -> None:

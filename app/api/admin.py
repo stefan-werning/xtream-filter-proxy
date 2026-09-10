@@ -132,6 +132,25 @@ async def crawler_reprobe(request: Request, kind: str = Body(...), item_id: str 
     return JSONResponse({"ok": True})
 
 
+@router.post("/crawler/reprobe-matching")
+async def crawler_reprobe_matching(
+    request: Request,
+    kind: str = Body(...),
+    q: str = Body(""),
+    status: str = Body(""),
+):
+    """Re-probe every item matching the same filter the Catalog tab is
+    showing (kind + name search + status). Used for e.g. requeuing all
+    'no_audio_info' results after the provider's metadata has improved,
+    without touching confirmed 'ok' rows. A `status` must be given -- an
+    unfiltered bulk re-probe is what 'Reset all probes' is for.
+    """
+    if not status:
+        return JSONResponse({"error": "a status filter is required"}, status_code=400)
+    count = request.app.state.crawler.reprobe_matching(kind, q, status)
+    return JSONResponse({"ok": True, "reset": count})
+
+
 @router.get("/overrides")
 async def list_overrides(request: Request, kind: str = ""):
     db = request.app.state.db
@@ -406,12 +425,9 @@ async def filter_preview(request: Request):
     )
 
 
-@router.get("/catalog")
-async def catalog(request: Request, kind: str = "vod", q: str = "", status: str = "", page: int = 1, page_size: int = 50):
-    db = request.app.state.db
-    page = max(page, 1)
-    page_size = min(max(page_size, 1), 200)
-
+def _catalog_where(kind: str, q: str, status: str) -> tuple[str, list]:
+    """Shared WHERE for the catalog table and the bulk re-probe endpoint,
+    so 'Re-probe these' targets exactly what the filtered table shows."""
     where = ["i.kind = ?"]
     args: list = [kind]
     if q:
@@ -423,9 +439,20 @@ async def catalog(request: Request, kind: str = "vod", q: str = "", status: str 
         else:
             where.append("ps.status = ?")
             args.append(status)
-    where_sql = " AND ".join(where)
+    return " AND ".join(where), args
 
-    base_from = "FROM items i LEFT JOIN probe_state ps ON ps.kind = i.kind AND ps.item_id = i.item_id"
+
+_CATALOG_FROM = "FROM items i LEFT JOIN probe_state ps ON ps.kind = i.kind AND ps.item_id = i.item_id"
+
+
+@router.get("/catalog")
+async def catalog(request: Request, kind: str = "vod", q: str = "", status: str = "", page: int = 1, page_size: int = 50):
+    db = request.app.state.db
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 200)
+
+    where_sql, args = _catalog_where(kind, q, status)
+    base_from = _CATALOG_FROM
 
     total = db.conn.execute(
         f"SELECT COUNT(*) c {base_from} WHERE {where_sql}", args

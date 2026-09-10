@@ -249,8 +249,11 @@ Reachable at `http://<host>:8080/`.
   cache and see counts plus sample titles from both sides, without touching
   the saved config.
 - **Catalog** — searchable table of cached items with probe status and
-  detected audio tracks. Supports forcing a re-probe of a single item, and
-  "always show" overrides that bypass all filters for a specific title.
+  detected audio tracks. Re-probe a single item, or — with a status filter
+  active — re-probe **all** matching items at once (e.g. every
+  `no_audio_info` once the provider's metadata has improved; confirmed
+  results for other statuses are left alone). Also "always show" overrides
+  that bypass all filters for a specific title.
 - **Delivered List** — exactly what your player receives right now for the
   selected type, after all filters. Useful for verifying that a filter did
   what you expected.

@@ -415,7 +415,9 @@
     </div>
     <div class="btn-row spaced">
       <button id="btn-cat-search">Search</button>
+      <button id="btn-cat-reprobe-all" class="ghost" hidden>Re-probe all matching</button>
     </div>
+    <p id="cat-reprobe-hint" class="hint" hidden>Re-probes every item matching the current type + search + status — e.g. all <code>no_audio_info</code> after the provider's metadata has caught up. Confirmed results for other statuses are untouched.</p>
     <div class="table-scroll">
       <table id="cat-table"><thead><tr><th>Name</th><th>Status</th><th>Audio</th><th></th></tr></thead><tbody></tbody></table>
     </div>
@@ -497,6 +499,8 @@ const I18N = {
     'js.retryErrorsDone': 'probe(s) reset to pending.',
     'js.resetDone': 'All probe states reset.',
     'js.syncStarted': 'Full sync started.',
+    'js.reprobeQueued': 'Queued for re-probing.',
+    'js.reprobeQueuedN': 'item(s) queued for re-probing.',
     'js.chooseType': 'Choose a type above to load its data.',
     'js.loadError': 'Could not load — check the connection and try again.',
     'status.running': 'running', 'status.paused': 'paused', 'status.outside_window': 'outside window',
@@ -1016,35 +1020,46 @@ $('btn-preview').onclick = async () => {
 let catPage = 1;
 const CAT_PAGE_SIZE = 50;
 
+let catTotal = 0;
+
 async function loadCatalogPage() {
-  const params = new URLSearchParams({
-    kind: $('cat-kind').value, q: $('cat-q').value, status: $('cat-status').value,
-    page: catPage, page_size: CAT_PAGE_SIZE,
-  });
-  const r = await fetch('/api/catalog?' + params);
-  const j = await r.json();
+  const kind = $('cat-kind').value;
+  const q = $('cat-q').value;
+  const status = $('cat-status').value;
   const tbody = document.querySelector('#cat-table tbody');
-  tbody.innerHTML = j.items.map(i => `
+  tbody.innerHTML = `<tr><td colspan="4" class="loading-note"><span class="spinner"></span> ${t('js.loading')}</td></tr>`;
+  let j;
+  try {
+    const params = new URLSearchParams({ kind, q, status, page: catPage, page_size: CAT_PAGE_SIZE });
+    const r = await fetch('/api/catalog?' + params);
+    j = await r.json();
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="4" class="hint">${t('js.loadError')}</td></tr>`;
+    return;
+  }
+  catTotal = j.total;
+  tbody.innerHTML = j.items.length ? j.items.map(i => `
     <tr>
-      <td>${i.name}${i.removed_at ? ' <span class="hint">' + t('js.removed') + '</span>' : ''}${i.overridden ? ' <span class="badge ok">always shown</span>' : ''}</td>
-      <td><span class="badge ${i.status}">${i.status}</span></td>
-      <td class="hint">${(i.audio_tracks || []).map(tr => tr.match_text).join(', ')}</td>
+      <td>${escHtml(i.name)}${i.removed_at ? ' <span class="hint">' + t('js.removed') + '</span>' : ''}${i.overridden ? ' <span class="badge ok">always shown</span>' : ''}</td>
+      <td><span class="badge ${escHtml(i.status)}">${escHtml(i.status)}</span></td>
+      <td class="hint">${escHtml((i.audio_tracks || []).map(tr => tr.match_text).join(', '))}</td>
       <td>
-        ${i.status !== 'n/a' ? `<button class="secondary reprobe-btn" data-kind="${$('cat-kind').value}" data-id="${i.item_id}">${t('js.reprobe')}</button>` : ''}
-        <button class="secondary override-btn" data-kind="${$('cat-kind').value}" data-id="${i.item_id}" data-overridden="${i.overridden}">${i.overridden ? 'Remove override' : 'Always show'}</button>
+        ${i.status !== 'n/a' ? `<button class="secondary reprobe-btn" data-id="${escHtml(i.item_id)}" style="min-height:32px;padding:6px 10px;">${t('js.reprobe')}</button>` : ''}
+        <button class="secondary override-btn" data-id="${escHtml(i.item_id)}" data-overridden="${i.overridden}" style="min-height:32px;padding:6px 10px;">${i.overridden ? 'Remove override' : 'Always show'}</button>
       </td>
-    </tr>`).join('');
-  document.querySelectorAll('.reprobe-btn').forEach(btn => btn.onclick = () => {
-    fetch('/api/crawler/reprobe', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({kind: btn.dataset.kind, item_id: btn.dataset.id})});
+    </tr>`).join('') : `<tr><td colspan="4" class="hint">No matching items.</td></tr>`;
+
+  document.querySelectorAll('.reprobe-btn').forEach(btn => btn.onclick = async () => {
+    btn.disabled = true;
+    try {
+      await fetch('/api/crawler/reprobe', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({kind, item_id: btn.dataset.id})});
+      toast(t('js.reprobeQueued'), 'ok');
+    } finally { btn.disabled = false; }
   });
   document.querySelectorAll('.override-btn').forEach(btn => btn.onclick = async () => {
     const isOverridden = btn.dataset.overridden === 'true';
-    const body = JSON.stringify({kind: btn.dataset.kind, item_id: btn.dataset.id});
-    if (isOverridden) {
-      await fetch('/api/overrides', {method: 'DELETE', headers: {'Content-Type': 'application/json'}, body});
-    } else {
-      await fetch('/api/overrides', {method: 'POST', headers: {'Content-Type': 'application/json'}, body});
-    }
+    const body = JSON.stringify({kind, item_id: btn.dataset.id});
+    await fetch('/api/overrides', {method: isOverridden ? 'DELETE' : 'POST', headers: {'Content-Type': 'application/json'}, body});
     loadCatalogPage();
   });
 
@@ -1052,11 +1067,48 @@ async function loadCatalogPage() {
   $('cat-page-info').textContent = `${t('js.page')} ${j.page} ${t('js.of')} ${totalPages} (${j.total} ${t('js.items')})`;
   $('btn-cat-prev').disabled = j.page <= 1;
   $('btn-cat-next').disabled = j.page >= totalPages;
+
+  // Bulk re-probe is only meaningful with a status filter (otherwise it's
+  // just "reset all"), and only worth showing if there's more than one hit.
+  const showBulk = !!status && j.total > 1;
+  $('btn-cat-reprobe-all').hidden = !showBulk;
+  $('cat-reprobe-hint').hidden = !showBulk;
+  if (showBulk) $('btn-cat-reprobe-all').textContent = `Re-probe all ${j.total} matching`;
 }
 
 $('btn-cat-search').onclick = () => { catPage = 1; loadCatalogPage(); };
 $('btn-cat-prev').onclick = () => { if (catPage > 1) { catPage--; loadCatalogPage(); } };
 $('btn-cat-next').onclick = () => { catPage++; loadCatalogPage(); };
+
+$('btn-cat-reprobe-all').onclick = () => {
+  const kind = $('cat-kind').value;
+  const q = $('cat-q').value;
+  const status = $('cat-status').value;
+  if (!status) return;
+  confirmInline($('btn-cat-reprobe-all'), `Re-probe all ${catTotal} "${status}" items?`, async () => {
+    const btn = $('btn-cat-reprobe-all');
+    btn.disabled = true;
+    try {
+      const r = await fetch('/api/crawler/reprobe-matching', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({kind, q, status}),
+      });
+      const j = await r.json();
+      if (r.ok) {
+        toast(`${j.reset} ${t('js.reprobeQueuedN')}`, 'ok');
+        catPage = 1;
+        loadCatalogPage();
+        refreshStats();
+      } else {
+        toast(t('js.error') + ' ' + (j.error || r.status), 'err');
+      }
+    } catch (e) {
+      toast(t('js.error') + ' ' + e, 'err');
+    } finally {
+      btn.disabled = false;
+    }
+  });
+};
 
 let allCategories = [];
 let excludedCategoryIds = new Set();
