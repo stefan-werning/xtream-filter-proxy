@@ -646,27 +646,26 @@ function logLine(l) {
 async function refreshLog() {
   const r = await fetch('/api/logs?limit=' + LOG_MAX_LINES);
   const j = await r.json();
-  // API returns newest-first; show oldest-first so it reads like a normal
-  // log and new SSE lines append naturally at the bottom.
-  const text = j.slice().reverse().map(logLine).join('\n');
+  // API returns newest-first; keep that order so the newest line is at the top.
+  const text = j.map(logLine).join('\n');
   const el = $('log');
   el.textContent = text;
-  el.scrollTop = el.scrollHeight;
+  el.scrollTop = 0;
   renderLogLegend(text);
 }
 
-// Append a single new line pushed over SSE, keeping the box capped and
-// auto-scrolled if the user was already at the bottom.
+// Prepend a single new line pushed over SSE, keeping the box capped and
+// scrolling back to the top if the user was already there.
 function appendLogLine(l) {
   const el = $('log');
-  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  const atTop = el.scrollTop < 24;
   let lines = el.textContent ? el.textContent.split('\n') : [];
-  lines.push(logLine(l));
-  if (lines.length > LOG_MAX_LINES) lines = lines.slice(lines.length - LOG_MAX_LINES);
+  lines.unshift(logLine(l));
+  if (lines.length > LOG_MAX_LINES) lines = lines.slice(0, LOG_MAX_LINES);
   const text = lines.join('\n');
   el.textContent = text;
   renderLogLegend(text);
-  if (atBottom) el.scrollTop = el.scrollHeight;
+  if (atTop) el.scrollTop = 0;
 }
 
 $('btn-pause-toggle').onclick = async () => {
