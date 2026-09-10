@@ -62,12 +62,24 @@ def _db_list(db, kind: str) -> list[dict]:
         if entry is None:
             entry = {}
         entry["name"] = row["name"]
-        entry[id_field] = row["item_id"]
+        # Preserve the id field's original value from raw_json -- upstream
+        # sends it as a JSON number, and strict clients (Smarters Pro on
+        # some platforms) drop VOD entries whose stream_id is a string.
+        # Only set it ourselves (as a number where possible) when raw_json
+        # didn't carry it -- the DB item_id is always a string.
+        if id_field not in entry:
+            entry[id_field] = _numeric_id(row["item_id"])
         entry["category_id"] = row["category_id"]
         if kind == "vod":
             entry["container_extension"] = row["container_ext"]
         out.append(entry)
     return out
+
+
+def _numeric_id(item_id: str):
+    """DB item_ids are strings; upstream IDs are JSON numbers. Return an int
+    when the id is purely numeric, else the string unchanged."""
+    return int(item_id) if isinstance(item_id, str) and item_id.isdigit() else item_id
 
 
 def _filter_stream_list(state, data: list, kind: str) -> list:
