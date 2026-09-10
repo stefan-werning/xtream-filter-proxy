@@ -72,6 +72,7 @@ def _db_list(db, kind: str) -> list[dict]:
         entry["category_id"] = row["category_id"]
         if kind == "vod":
             entry["container_extension"] = row["container_ext"]
+            _normalize_vod_types(entry)
         out.append(entry)
     return out
 
@@ -80,6 +81,29 @@ def _numeric_id(item_id: str):
     """DB item_ids are strings; upstream IDs are JSON numbers. Return an int
     when the id is purely numeric, else the string unchanged."""
     return int(item_id) if isinstance(item_id, str) and item_id.isdigit() else item_id
+
+
+def _as_float(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _normalize_vod_types(entry: dict) -> None:
+    """Xtream panels (this one's upstream included) are inconsistent about
+    the JSON type of a few get_vod_streams fields -- across entries of the
+    *same* list, rating_5based arrives as float, int OR string; tmdb as
+    string or int. Lenient clients cope; strict ones (Smarters Pro on
+    Google TV) deserialise into typed objects and drop the whole list on
+    the first type mismatch. Pin the known offenders. get_series is left
+    alone -- its types are already consistent and it works."""
+    if "rating_5based" in entry:
+        entry["rating_5based"] = _as_float(entry["rating_5based"])
+    if entry.get("rating") is not None:
+        entry["rating"] = str(entry["rating"])
+    if entry.get("tmdb") is not None:
+        entry["tmdb"] = str(entry["tmdb"])
 
 
 def _filter_stream_list(state, data: list, kind: str) -> list:

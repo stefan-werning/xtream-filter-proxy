@@ -113,3 +113,34 @@ def test_db_list_current_db_values_win_over_stale_raw_json(tmp_path):
     assert entry["name"] == "Fresh Name"
     assert entry["category_id"] == "6"
     assert entry["stream_icon"] == "http://provider/covers/1.jpg"
+
+
+def test_db_list_normalizes_inconsistent_vod_field_types(tmp_path):
+    """Upstream sends rating_5based / tmdb with mixed types across a list;
+    strict clients drop the whole list on a mismatch. VOD entries must come
+    out with consistent types."""
+    db = make_db(tmp_path)
+    insert_item(db, "vod", "1", "A", "1", raw_json=json.dumps(
+        {"name": "A", "stream_id": 1, "category_id": "1",
+         "rating_5based": "3.5", "tmdb": 10704, "rating": 4.3}))
+    insert_item(db, "vod", "2", "B", "1", raw_json=json.dumps(
+        {"name": "B", "stream_id": 2, "category_id": "1",
+         "rating_5based": 5, "tmdb": "27847", "rating": "4.1"}))
+
+    out = {e["stream_id"]: e for e in _db_list(db, "vod")}
+    for e in out.values():
+        assert isinstance(e["rating_5based"], float)
+        assert isinstance(e["tmdb"], str)
+        assert isinstance(e["rating"], str)
+    assert out[1]["rating_5based"] == 3.5
+    assert out[2]["rating_5based"] == 5.0
+    assert out[1]["tmdb"] == "10704"
+
+
+def test_db_list_leaves_series_types_alone(tmp_path):
+    """get_series works as-is; the VOD normalisation must not touch it."""
+    db = make_db(tmp_path)
+    insert_item(db, "series", "1", "S", "1", raw_json=json.dumps(
+        {"name": "S", "series_id": 1, "category_id": "1", "rating_5based": "2.5"}))
+    entry = _db_list(db, "series")[0]
+    assert entry["rating_5based"] == "2.5"  # string, unchanged
