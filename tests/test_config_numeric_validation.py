@@ -51,3 +51,28 @@ def test_ffprobe_timeout_validated():
     c["ffprobe"]["timeout_seconds"] = 0
     with pytest.raises(ConfigError):
         validate_config(c)
+
+
+def test_deep_merge_does_not_alias_default_config(tmp_path):
+    """Loading a config that doesn't set category_filters, then mutating
+    the loaded config's category_filters, must not leak into DEFAULT_CONFIG
+    (which would poison every subsequent ConfigManager)."""
+    import copy as _copy
+
+    from app.core.config import DEFAULT_CONFIG, ConfigManager
+
+    before = _copy.deepcopy(DEFAULT_CONFIG)
+
+    p = tmp_path / "c.yaml"
+    p.write_text("upstream:\n  base_url: http://x\n  username: u\n  password: p\n")
+    mgr = ConfigManager(p)
+    cfg = mgr.get()
+    cfg["category_filters"]["vod"]["always_deliver_ids"].append("999")
+    cfg["title_filters"]["live"]["exclude"].append("(?i)junk")
+
+    assert DEFAULT_CONFIG == before, "DEFAULT_CONFIG was mutated via a loaded config"
+
+    # a fresh manager still gets clean defaults
+    mgr2 = ConfigManager(p)
+    assert mgr2.get()["category_filters"]["vod"]["always_deliver_ids"] == []
+    assert mgr2.get()["title_filters"]["live"]["exclude"] == []

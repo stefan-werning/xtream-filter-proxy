@@ -100,6 +100,14 @@ def _filter_stream_list(state, data: list, kind: str) -> list:
             continue
         if str(raw_id) in visible_ids:
             result.append(entry)
+
+    # `num` is the item's position in *this* list, not a global id (that's
+    # stream_id / series_id). The upstream value comes from the full
+    # unfiltered catalog (e.g. num 34016 in a list of only 12908 items) --
+    # some clients (Smarters Pro on Google TV) treat num as a 1-based index
+    # and silently drop everything when it's out of range. Renumber 1..N.
+    for i, entry in enumerate(result, start=1):
+        entry["num"] = i
     return result
 
 

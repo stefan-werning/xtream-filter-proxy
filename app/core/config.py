@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import re
 import threading
 from pathlib import Path
@@ -79,12 +80,21 @@ class ConfigConflictError(ValueError):
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
-    result = dict(base)
-    for key, value in override.items():
-        if isinstance(value, dict) and isinstance(result.get(key), dict):
-            result[key] = _deep_merge(result[key], value)
+    """Returns a new dict; never aliases nested dicts/lists from `base` or
+    `override`, so mutating the result can't leak back into DEFAULT_CONFIG
+    or a previously-loaded config.
+    """
+    result: dict[str, Any] = {}
+    for key, value in base.items():
+        if key in override and isinstance(value, dict) and isinstance(override[key], dict):
+            result[key] = _deep_merge(value, override[key])
+        elif key in override:
+            result[key] = copy.deepcopy(override[key])
         else:
-            result[key] = value
+            result[key] = copy.deepcopy(value)
+    for key, value in override.items():
+        if key not in result:
+            result[key] = copy.deepcopy(value)
     return result
 
 
