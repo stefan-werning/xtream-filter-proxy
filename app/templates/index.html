@@ -982,7 +982,14 @@ loadSettings();
 // reflects an actually-in-flight poll and isn't just permanently spinning.
 const POLL_INTERVAL_MS = 10000;
 let pollTimer = null;
+let pollInFlight = false;
 async function pollLoop() {
+  if (pollInFlight) return;          // guard against overlapping invocations
+  if (document.hidden) {             // tab backgrounded -- don't poll, just re-check later
+    pollTimer = setTimeout(pollLoop, POLL_INTERVAL_MS);
+    return;
+  }
+  pollInFlight = true;
   try {
     await refreshStatus();
     // Progress and log only matter while the dashboard is visible; skip
@@ -994,9 +1001,22 @@ async function pollLoop() {
   } catch (e) {
     console.error('poll failed', e);
   } finally {
+    pollInFlight = false;
+    clearTimeout(pollTimer);
     pollTimer = setTimeout(pollLoop, POLL_INTERVAL_MS);
   }
 }
+
+// When the tab comes back to the foreground (Android Chrome throttles or
+// freezes background timers, so the loop may have been stalled for a long
+// time), run a poll right away instead of waiting out the pending timer.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    clearTimeout(pollTimer);
+    pollLoop();
+  }
+});
+
 pollLoop();
 </script>
 </body>
