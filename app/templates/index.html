@@ -437,7 +437,7 @@
   <div class="card">
     <div class="row">
       <div class="col"><label>Type</label>
-        <select id="cat-kind"><option value="vod">VOD</option><option value="series">Series</option><option value="live">Live</option></select>
+        <select id="cat-kind"><option value="" selected>— choose —</option><option value="vod">VOD</option><option value="series">Series</option><option value="live">Live</option></select>
       </div>
       <div class="col"><label>Search</label><input id="cat-q"></div>
       <div class="col"><label>Status</label>
@@ -572,6 +572,16 @@ document.querySelectorAll('nav a').forEach(a => a.addEventListener('click', () =
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
   a.classList.add('active');
   $(a.dataset.tab).classList.add('active');
+  // The Catalog / Categories lists only load on a type selection; a stale
+  // selection left from a previous visit shows no data and no way to reload.
+  // Reset the type to "— choose —" on entry so the tab always starts clean.
+  if (a.dataset.tab === 'catalog') {
+    $('cat-kind').value = '';
+    loadCatalogPage();
+  } else if (a.dataset.tab === 'categories') {
+    $('cats-kind').value = '';
+    loadCategories();
+  }
   // The poll loop skips stats/log while the dashboard is hidden -- refresh
   // them right away on return instead of waiting for the next tick.
   if (a.dataset.tab === 'dashboard' && typeof refreshStats === 'function') {
@@ -1093,6 +1103,11 @@ async function loadCatalogPage() {
   const q = $('cat-q').value;
   const status = $('cat-status').value;
   const tbody = document.querySelector('#cat-table tbody');
+  if (!kind) {
+    tbody.innerHTML = `<tr><td colspan="4" class="hint">${t('js.chooseType')}</td></tr>`;
+    $('cat-page-info').textContent = '';
+    return;
+  }
   tbody.innerHTML = `<tr><td colspan="4" class="loading-note"><span class="spinner"></span> ${t('js.loading')}</td></tr>`;
   let j;
   try {
@@ -1144,6 +1159,7 @@ async function loadCatalogPage() {
 }
 
 $('btn-cat-search').onclick = () => { catPage = 1; loadCatalogPage(); };
+$('cat-kind').onchange = () => { catPage = 1; loadCatalogPage(); };
 $('btn-cat-prev').onclick = () => { if (catPage > 1) { catPage--; loadCatalogPage(); } };
 $('btn-cat-next').onclick = () => { catPage++; loadCatalogPage(); };
 
