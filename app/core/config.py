@@ -45,9 +45,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "series": {"include": [], "exclude": [], "match_category": False},
     },
     "category_filters": {
-        "live": {"excluded_ids": []},
-        "vod": {"excluded_ids": []},
-        "series": {"excluded_ids": []},
+        # excluded_ids:       category hidden entirely, crawler skips it
+        # always_deliver_ids: every title in the category is delivered as-is
+        #                     -- title/audio filters skipped, crawler skips
+        #                     probing them (you're vouching the whole
+        #                     category is in your target language)
+        "live": {"excluded_ids": [], "always_deliver_ids": []},
+        "vod": {"excluded_ids": [], "always_deliver_ids": []},
+        "series": {"excluded_ids": [], "always_deliver_ids": []},
     },
     "audio_filters": {
         "vod": {"include": [], "exclude": []},
@@ -103,6 +108,17 @@ def validate_config(cfg: dict[str, Any]) -> None:
     on_unknown = cfg.get("audio_filters", {}).get("on_unknown", "keep")
     if on_unknown not in ("keep", "drop"):
         raise ConfigError("audio_filters.on_unknown must be 'keep' or 'drop'")
+
+    for kind in ("live", "vod", "series"):
+        cf = cfg.get("category_filters", {}).get(kind, {})
+        excl = {str(c) for c in cf.get("excluded_ids", [])}
+        deliver = {str(c) for c in cf.get("always_deliver_ids", [])}
+        both = excl & deliver
+        if both:
+            raise ConfigError(
+                f"category_filters.{kind}: {sorted(both)} is in both excluded_ids "
+                f"and always_deliver_ids"
+            )
     for win in cfg.get("crawl_schedule", {}).get("windows", []):
         if not re.match(r"^\d{2}:\d{2}$", win.get("start", "")):
             raise ConfigError(f"Invalid window start time: {win.get('start')}")

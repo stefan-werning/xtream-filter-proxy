@@ -499,14 +499,15 @@ async def catalog(request: Request, kind: str = "vod", q: str = "", status: str 
 
 @router.get("/categories")
 async def list_categories(request: Request, kind: str = "vod"):
-    """Lists all known categories for a kind, with item counts and whether
-    they're currently excluded, for the Categories settings tab.
+    """Lists all known categories for a kind, with item counts and each
+    category's mode (filtered / excluded / always-deliver), for the
+    Categories settings tab.
     """
     db = request.app.state.db
     cfg = request.app.state.config_mgr.get()
-    excluded = set(
-        str(c) for c in cfg.get("category_filters", {}).get(kind, {}).get("excluded_ids", [])
-    )
+    cat_cfg = cfg.get("category_filters", {}).get(kind, {})
+    excluded = {str(c) for c in cat_cfg.get("excluded_ids", [])}
+    always_deliver = {str(c) for c in cat_cfg.get("always_deliver_ids", [])}
 
     cur = db.conn.execute(
         "SELECT c.category_id, c.category_name, COUNT(i.item_id) item_count "
@@ -516,15 +517,19 @@ async def list_categories(request: Request, kind: str = "vod"):
         "ORDER BY c.category_name",
         (kind,),
     )
-    categories = [
-        {
-            "category_id": row["category_id"],
-            "category_name": row["category_name"],
-            "item_count": row["item_count"],
-            "excluded": row["category_id"] in excluded,
-        }
-        for row in cur.fetchall()
-    ]
+    categories = []
+    for row in cur.fetchall():
+        cid = str(row["category_id"])
+        mode = "excluded" if cid in excluded else "always_deliver" if cid in always_deliver else "filtered"
+        categories.append(
+            {
+                "category_id": row["category_id"],
+                "category_name": row["category_name"],
+                "item_count": row["item_count"],
+                "excluded": cid in excluded,          # kept for compatibility
+                "mode": mode,
+            }
+        )
     return JSONResponse({"categories": categories})
 
 

@@ -367,7 +367,12 @@
 
 <section id="categories" class="tab">
   <div class="card">
-    <p class="hint">Uncheck a category to hide all its titles from the filtered lists — and, for VOD/Series, skip probing those titles entirely so the crawler focuses on what you actually want to see.</p>
+    <p class="hint">Per category, choose how its titles are handled:</p>
+    <ul class="hint" style="margin:0 0 8px 18px; line-height:1.6;">
+      <li><b>Filtered</b> — title &amp; audio filters apply as normal.</li>
+      <li><b>Excluded</b> — all titles hidden; the crawler skips them.</li>
+      <li><b>Always deliver</b> — every title delivered as-is, filters skipped, no probing (use when you're sure the whole category is in your target language).</li>
+    </ul>
     <div class="row">
       <div class="col"><label>Type</label>
         <select id="cats-kind">
@@ -378,14 +383,20 @@
       <div class="col"><label>Search</label><input id="cats-q" placeholder="Filter by name..."></div>
     </div>
     <div class="btn-row spaced">
-      <button id="btn-cats-select-all" class="secondary">Select all</button>
-      <button id="btn-cats-select-none" class="secondary">Select none</button>
-      <button id="btn-cats-save">Save selection</button>
+      <label style="width:auto;margin:0;font-size:12px;color:var(--label-fg);">Set all shown to
+        <select id="cats-bulk" style="width:auto;display:inline-block;margin-left:4px;">
+          <option value="">—</option>
+          <option value="filtered">Filtered</option>
+          <option value="excluded">Excluded</option>
+          <option value="always_deliver">Always deliver</option>
+        </select>
+      </label>
+      <button id="btn-cats-save">Save</button>
       <span id="cats-msg" class="hint"></span>
     </div>
     <div class="table-scroll">
       <table id="cats-table">
-        <thead><tr><th></th><th>Category</th><th>Items</th></tr></thead>
+        <thead><tr><th>Mode</th><th>Category</th><th>Items</th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -1138,7 +1149,8 @@ $('btn-cat-reprobe-all').onclick = () => {
 };
 
 let allCategories = [];
-let excludedCategoryIds = new Set();
+// category_id -> 'filtered' | 'excluded' | 'always_deliver'
+let categoryModes = {};
 
 async function loadCategories() {
   const kind = $('cats-kind').value;
@@ -1155,13 +1167,20 @@ async function loadCategories() {
     const r = await fetch('/api/categories?kind=' + kind);
     const j = await r.json();
     allCategories = j.categories;
-    excludedCategoryIds = new Set(allCategories.filter(c => c.excluded).map(c => c.category_id));
+    categoryModes = {};
+    for (const c of allCategories) categoryModes[c.category_id] = c.mode || 'filtered';
     renderCategories();
   } catch (e) {
     tbody.innerHTML = `<tr><td colspan="3" class="hint">${t('js.loadError')}</td></tr>`;
     toast(t('js.error') + ' ' + e, 'err');
   }
 }
+
+const CAT_MODE_OPTS = [
+  ['filtered', 'Filtered'],
+  ['excluded', 'Excluded'],
+  ['always_deliver', 'Always deliver'],
+];
 
 function renderCategories() {
   const tbody = document.querySelector('#cats-table tbody');
@@ -1171,41 +1190,45 @@ function renderCategories() {
   }
   const q = $('cats-q').value.toLowerCase();
   const filtered = allCategories.filter(c => c.category_name.toLowerCase().includes(q));
-  tbody.innerHTML = filtered.map(c => `
-    <tr>
-      <td><input type="checkbox" class="cat-checkbox" data-id="${c.category_id}" ${excludedCategoryIds.has(c.category_id) ? '' : 'checked'} style="width:auto;"></td>
-      <td>${c.category_name}</td>
+  tbody.innerHTML = filtered.map(c => {
+    const cur = categoryModes[c.category_id] || 'filtered';
+    const opts = CAT_MODE_OPTS.map(([v, label]) =>
+      `<option value="${v}" ${v === cur ? 'selected' : ''}>${label}</option>`).join('');
+    return `<tr>
+      <td><select class="cat-mode" data-id="${escHtml(c.category_id)}" style="width:auto;">${opts}</select></td>
+      <td>${escHtml(c.category_name)}</td>
       <td class="hint">${c.item_count}</td>
-    </tr>`).join('');
-  document.querySelectorAll('.cat-checkbox').forEach(cb => {
-    cb.onchange = () => {
-      if (cb.checked) excludedCategoryIds.delete(cb.dataset.id);
-      else excludedCategoryIds.add(cb.dataset.id);
-    };
+    </tr>`;
+  }).join('');
+  document.querySelectorAll('.cat-mode').forEach(sel => {
+    sel.onchange = () => { categoryModes[sel.dataset.id] = sel.value; };
   });
   $('cats-msg').textContent = '';
 }
 
 $('cats-kind').onchange = loadCategories;
 $('cats-q').oninput = renderCategories;
-$('btn-cats-select-all').onclick = () => {
-  document.querySelectorAll('#cats-table .cat-checkbox').forEach(cb => {
-    cb.checked = true;
-    excludedCategoryIds.delete(cb.dataset.id);
+$('cats-bulk').onchange = () => {
+  const mode = $('cats-bulk').value;
+  if (!mode) return;
+  document.querySelectorAll('#cats-table .cat-mode').forEach(sel => {
+    sel.value = mode;
+    categoryModes[sel.dataset.id] = mode;
   });
-};
-$('btn-cats-select-none').onclick = () => {
-  document.querySelectorAll('#cats-table .cat-checkbox').forEach(cb => {
-    cb.checked = false;
-    excludedCategoryIds.add(cb.dataset.id);
-  });
+  $('cats-bulk').value = '';
 };
 $('btn-cats-save').onclick = async () => {
   const kind = $('cats-kind').value;
   if (!kind) { toast(t('js.chooseType'), 'err'); return; }
+  const excluded_ids = [];
+  const always_deliver_ids = [];
+  for (const [cid, mode] of Object.entries(categoryModes)) {
+    if (mode === 'excluded') excluded_ids.push(cid);
+    else if (mode === 'always_deliver') always_deliver_ids.push(cid);
+  }
   const patch = {
     _version: cfgVersion,
-    category_filters: { [kind]: { excluded_ids: Array.from(excludedCategoryIds) } },
+    category_filters: { [kind]: { excluded_ids, always_deliver_ids } },
   };
   const btn = $('btn-cats-save');
   btn.disabled = true;

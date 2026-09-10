@@ -75,15 +75,20 @@ audio_filters:
     exclude: []
   on_unknown: keep
 
-# Categories to hide entirely. Easiest to manage from the Web UI's
-# "Categories" tab, which lists every category with its name and item count
-# and writes the IDs back here. Titles in an excluded category are hidden
-# and (for vod/series) skipped by the crawler, so probing effort goes only
-# into categories you actually want.
+# Per-category handling. Easiest to manage from the Web UI's "Categories"
+# tab, which lists every category and writes the IDs back here.
+#   excluded_ids       - category hidden entirely; crawler skips it.
+#   always_deliver_ids - every title in the category delivered as-is
+#                        (title + audio filters skipped) and not probed.
+#                        Use when you're sure the whole category is in your
+#                        target language. A category can't be in both.
 category_filters:
   live:
     excluded_ids: []
+    always_deliver_ids: []
   vod:
     excluded_ids: []
+    always_deliver_ids: []
   series:
     excluded_ids: []
+    always_deliver_ids: []

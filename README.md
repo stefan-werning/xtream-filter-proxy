@@ -211,7 +211,7 @@ the `--port` flag when running directly).
 | `crawler` | `request_delay_seconds`, `reserve_slots` (**set 0 on a single-connection account** or ffprobe never runs), `ffprobe_cooldown_seconds` (min gap between ffprobe runs so the panel can free the connection — raise if you see repeated `error (exit code 1)`), `slot_recheck_seconds`, `sync_interval_minutes`, retention (`purge_after_days`) and log rotation (`log_max_age_days`, `log_max_rows`) |
 | `crawl_schedule` | Day/time windows the crawler may run in (or `enabled: false` to run continuously) |
 | `title_filters` | Per-kind (`live`/`vod`/`series`) include/exclude regex lists, matched against the title (optionally also the category name) |
-| `category_filters` | Per-kind list of category IDs to hide entirely — easiest to manage from the Categories tab |
+| `category_filters` | Per-kind `excluded_ids` (hidden, not probed) and `always_deliver_ids` (delivered as-is, filters skipped, not probed) — easiest to manage from the Categories tab |
 | `audio_filters` | Per-kind (`vod`/`series` only) include/exclude regex matched against each probed audio track, plus `on_unknown` |
 
 ### Filter semantics
@@ -245,8 +245,10 @@ Reachable at `http://<host>:8080/`.
   section for the ffprobe/slot knobs), crawl schedule, all filter regex
   fields. Everything here writes straight back to `config.yaml`; the
   retention/log-rotation knobs are file-only.
-- **Categories** — every category with its item count; uncheck one to hide
-  it and stop the crawler wasting probes on it.
+- **Categories** — set each category to *Filtered* (normal), *Excluded*
+  (hidden, not probed), or *Always deliver* (every title delivered as-is,
+  filters skipped, not probed — for a category you know is all in your
+  language, e.g. a provider's "DE - …" section).
 - **Filter Preview** — try a title/audio regex combination against the live
   cache and see counts plus sample titles from both sides, without touching
   the saved config.

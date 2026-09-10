@@ -74,6 +74,7 @@ def compute_visible_for_kind(
     match_category = title_cfg.get("match_category", False)
     category_names = category_names or {}
     excluded_category_ids = excluded_category_ids_for_kind(config, kind)
+    always_deliver_ids = always_deliver_category_ids_for_kind(config, kind)
     compiled_title = compile_filter(title_cfg.get("include", []), title_cfg.get("exclude", []))
 
     audio_cfg = config.get("audio_filters", {}).get(kind) if kind in ("vod", "series") else None
@@ -109,11 +110,14 @@ def compute_visible_for_kind(
         name = row["name"]
         category_id = row["category_id"]
 
-        if item_id not in overridden_ids:
-            if category_id is not None and str(category_id) in excluded_category_ids:
+        cat_str = str(category_id) if category_id is not None else None
+        always_deliver = cat_str is not None and cat_str in always_deliver_ids
+
+        if item_id not in overridden_ids and not always_deliver:
+            if cat_str is not None and cat_str in excluded_category_ids:
                 continue
 
-            cat_name = category_names.get(str(category_id)) if category_id is not None else None
+            cat_name = category_names.get(cat_str) if cat_str is not None else None
             if not title_passes(name, cat_name, title_cfg, match_category, compiled=compiled_title):
                 continue
 
@@ -125,8 +129,8 @@ def compute_visible_for_kind(
                     continue
 
         visible_ids.add(item_id)
-        if category_id is not None:
-            visible_categories.add(str(category_id))
+        if cat_str is not None:
+            visible_categories.add(cat_str)
 
     _filter_cache.set(kind, config_version, data_version, visible_ids, visible_categories)
     return visible_ids, visible_categories
@@ -163,6 +167,7 @@ def compute_hidden_breakdown_for_kind(
     match_category = title_cfg.get("match_category", False)
     category_names = category_names or {}
     excluded_category_ids = excluded_category_ids_for_kind(config, kind)
+    always_deliver_ids = always_deliver_category_ids_for_kind(config, kind)
     compiled_title = compile_filter(title_cfg.get("include", []), title_cfg.get("exclude", []))
 
     audio_cfg = config.get("audio_filters", {}).get(kind) if kind in ("vod", "series") else None
@@ -192,12 +197,16 @@ def compute_hidden_breakdown_for_kind(
             continue
         name = row["name"]
         category_id = row["category_id"]
+        cat_str = str(category_id) if category_id is not None else None
 
-        if category_id is not None and str(category_id) in excluded_category_ids:
+        if cat_str is not None and cat_str in always_deliver_ids:
+            continue  # delivered as-is, not hidden
+
+        if cat_str is not None and cat_str in excluded_category_ids:
             counts["category"] += 1
             continue
 
-        cat_name = category_names.get(str(category_id)) if category_id is not None else None
+        cat_name = category_names.get(cat_str) if cat_str is not None else None
         if not title_passes(name, cat_name, title_cfg, match_category, compiled=compiled_title):
             counts["title"] += 1
             continue
@@ -220,35 +229,50 @@ def excluded_category_ids_for_kind(config: dict, kind: str) -> set[str]:
     )
 
 
+def always_deliver_category_ids_for_kind(config: dict, kind: str) -> set[str]:
+    """Categories whose every title is delivered unconditionally -- title
+    and audio filters are skipped for them, and the crawler doesn't probe
+    them.
+    """
+    return set(
+        str(c) for c in config.get("category_filters", {}).get(kind, {}).get("always_deliver_ids", [])
+    )
+
+
+def _no_probe_category_ids(config: dict, kind: str) -> set[str]:
+    """Categories the crawler should not spend probes on: excluded ones
+    (hidden anyway) and always-deliver ones (delivered regardless)."""
+    return excluded_category_ids_for_kind(config, kind) | always_deliver_category_ids_for_kind(config, kind)
+
+
 def sync_probe_state_with_category_filters(db: Database, config: dict) -> None:
-    """Marks pending items in now-excluded categories as 'skipped' (so they
-    stop showing as pending progress, and the crawler stops considering
-    them), and un-skips items whose category was re-included. Call this
-    whenever category_filters change, and after each catalog sync (in case
-    newly-seen items land in an already-excluded category).
+    """Marks pending items in categories the crawler shouldn't probe
+    (excluded OR always-deliver) as 'skipped', and un-skips items whose
+    category went back to normal filtering. Call this whenever
+    category_filters change, and after each catalog sync (in case newly-
+    seen items land in such a category).
     """
     with db.cursor() as cur:
         for kind in ("vod", "series"):
-            excluded = excluded_category_ids_for_kind(config, kind)
+            no_probe = _no_probe_category_ids(config, kind)
 
-            if excluded:
-                placeholders = ",".join("?" for _ in excluded)
-                # Items with a manual override are exempt from being
-                # skipped -- the whole point of "always show" is that the
-                # crawler still probes them for real audio data.
+            if no_probe:
+                placeholders = ",".join("?" for _ in no_probe)
+                # Items with a manual override are exempt -- the whole point
+                # of "always show" is that the crawler still probes them.
                 cur.execute(
                     f"UPDATE probe_state SET status = 'skipped' "
                     f"WHERE kind = ? AND status IN ('pending', 'deferred') AND item_id IN ("
                     f"SELECT item_id FROM items WHERE kind = ? AND category_id IN ({placeholders})"
                     f") AND item_id NOT IN (SELECT item_id FROM manual_overrides WHERE kind = ?)",
-                    (kind, kind, *excluded, kind),
+                    (kind, kind, *no_probe, kind),
                 )
                 cur.execute(
                     f"UPDATE probe_state SET status = 'pending' "
                     f"WHERE kind = ? AND status = 'skipped' AND item_id IN ("
                     f"SELECT item_id FROM items WHERE kind = ? AND (category_id IS NULL OR category_id NOT IN ({placeholders}))"
                     f")",
-                    (kind, kind, *excluded),
+                    (kind, kind, *no_probe),
                 )
             else:
                 cur.execute(
