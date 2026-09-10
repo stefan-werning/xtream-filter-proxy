@@ -107,3 +107,56 @@ def test_response_matches_panel_serialisation(tmp_path):
     e = r.json()[0]
     assert e["name"] == "DE - Brüder & Schwestern (Ölkrieg)"
     assert e["stream_icon"] == "https://img.example/t/p/w600/abc.jpg"
+
+
+def test_list_request_does_not_block_the_event_loop(tmp_path, monkeypatch):
+    """Building a get_vod_streams response is blocking work (wide SQLite
+    scan + json.loads per row). It must run in a worker thread: if it runs
+    on the event loop a slow host stalls the loop and wedges the next
+    request on a kept-alive connection -- Smarters Pro on Google TV
+    pipelines its calls and then shows an empty VOD tab.
+
+    Make the blocking build sleep, fire the request, and assert the loop
+    stayed responsive (a concurrent task kept ticking) meanwhile.
+    """
+    import asyncio
+    import time as _time
+
+    import httpx
+
+    from app.api import xtream
+
+    app, db = make_app(tmp_path)
+    add_vod(db, "1", "M", "1", num=1)
+    invalidate_filter_cache()
+
+    real = xtream._stream_list_response
+
+    def slow(state, kind):
+        _time.sleep(0.4)  # stand in for a slow host
+        return real(state, kind)
+
+    monkeypatch.setattr(xtream, "_stream_list_response", slow)
+
+    async def scenario():
+        ticks = 0
+
+        async def ticker():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.02)
+                ticks += 1
+
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://t") as ac:
+            t = asyncio.create_task(ticker())
+            r = await ac.get("/player_api.php", params={
+                "username": "x", "password": "y", "action": "get_vod_streams",
+            })
+            t.cancel()
+            return r.status_code, ticks
+
+    status, ticks = asyncio.run(scenario())
+    assert status == 200
+    # a blocked loop would let through ~0 ticks during the 0.4s build
+    assert ticks >= 5

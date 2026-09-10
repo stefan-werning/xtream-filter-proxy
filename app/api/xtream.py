@@ -5,6 +5,7 @@ import logging
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import RedirectResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 import httpx
 
 from app.core.catalog import compute_visible_for_kind, data_version
@@ -195,6 +196,20 @@ def _filter_categories(state, data: list, kind: str) -> list:
     return result
 
 
+def _stream_list_response(state, kind: str) -> list:
+    """Blocking: build + filter a get_*_streams / get_series list from the
+    DB. Call via run_in_threadpool -- see player_api()."""
+    data = _db_list(state.db, kind)
+    return _filter_stream_list(state, data, kind)
+
+
+def _categories_response(state, kind: str) -> list:
+    """Blocking: build + filter a get_*_categories list. Call via
+    run_in_threadpool -- see player_api()."""
+    data = _categories_from_db(state.db, kind)
+    return _filter_categories(state, data, kind)
+
+
 @router.get("/player_api.php")
 async def player_api(request: Request):
     state = _get_app_state(request)
@@ -204,22 +219,26 @@ async def player_api(request: Request):
     upstream_params = {k: v for k, v in params.items() if k not in ("username", "password")}
 
     # List/category actions are filtered against the local cache only --
-    # never wait on a network request, per spec section 3.
+    # never wait on a network request, per spec section 3. Building these
+    # lists is a chunk of synchronous work -- a wide SQLite scan plus a
+    # json.loads per row for the stream lists (tens of thousands of rows on
+    # a full catalogue). Run it in a worker thread: on a slow host it takes
+    # long enough to stall the event loop, and a stalled loop wedges the
+    # *next* request on a kept-alive connection (Smarters Pro on Google TV
+    # pipelines its calls and then shows an empty VOD tab). db.conn is
+    # thread-local and WAL allows concurrent readers, so this is safe.
     if action in CATEGORY_ACTIONS:
         kind = CATEGORY_ACTIONS[action]
-        data = _categories_from_db(state.db, kind)
-        filtered = _filter_categories(state, data, kind)
+        filtered = await run_in_threadpool(_categories_response, state, kind)
         return JSONResponse(filtered)
 
     if action in STREAM_ACTIONS:
         kind = STREAM_ACTIONS[action]
-        data = _db_list(state.db, kind)
-        filtered = _filter_stream_list(state, data, kind)
+        filtered = await run_in_threadpool(_stream_list_response, state, kind)
         return JSONResponse(filtered)
 
     if action == "get_series":
-        data = _db_list(state.db, "series")
-        filtered = _filter_stream_list(state, data, "series")
+        filtered = await run_in_threadpool(_stream_list_response, state, "series")
         return JSONResponse(filtered)
 
     # Login/user_info, get_vod_info, get_series_info, and everything else:
