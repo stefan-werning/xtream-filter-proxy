@@ -459,6 +459,12 @@ document.querySelectorAll('nav a').forEach(a => a.addEventListener('click', () =
   document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
   a.classList.add('active');
   $(a.dataset.tab).classList.add('active');
+  // The poll loop skips stats/log while the dashboard is hidden -- refresh
+  // them right away on return instead of waiting for the next tick.
+  if (a.dataset.tab === 'dashboard' && typeof refreshStats === 'function') {
+    refreshStats();
+    refreshLog();
+  }
 }));
 
 function linesToArr(s) { return s.split('\n').map(x => x.trim()).filter(Boolean); }
@@ -971,18 +977,24 @@ loadSettings();
 // overlapping fetches. This waits for the current round to finish before
 // scheduling the next one. The three requests run one after another rather
 // than in parallel so a weak CPU isn't hit with all three at once (which
-// made the whole page feel frozen); each has its own inline spinner so
-// you can see work is happening.
+// made the whole page feel frozen). Each fetch flips its own inline
+// spinner on only for the duration of that request, so the spinner
+// reflects an actually-in-flight poll and isn't just permanently spinning.
+const POLL_INTERVAL_MS = 10000;
 let pollTimer = null;
 async function pollLoop() {
   try {
     await refreshStatus();
-    await refreshStats();
-    await refreshLog();
+    // Progress and log only matter while the dashboard is visible; skip
+    // their (heavier) requests otherwise so the loop stays cheap.
+    if ($('dashboard').classList.contains('active')) {
+      await refreshStats();
+      await refreshLog();
+    }
   } catch (e) {
     console.error('poll failed', e);
   } finally {
-    pollTimer = setTimeout(pollLoop, 5000);
+    pollTimer = setTimeout(pollLoop, POLL_INTERVAL_MS);
   }
 }
 pollLoop();
