@@ -11,10 +11,20 @@ _hidden_breakdown_cache: dict[str, tuple[int, int, dict[str, int]]] = {}
 # kind -> (config_version, data_version, breakdown) -- separate from
 # _filter_cache since it's keyed the same way but holds a different shape.
 
+# Extra callbacks to run on invalidate_filter_cache() -- e.g. the xtream
+# layer's rendered-response cache, which is derived from the same inputs.
+_invalidation_hooks: list = []
+
+
+def register_invalidation_hook(fn) -> None:
+    _invalidation_hooks.append(fn)
+
 
 def invalidate_filter_cache() -> None:
     _filter_cache.invalidate()
     _hidden_breakdown_cache.clear()
+    for fn in _invalidation_hooks:
+        fn()
 
 
 @dataclass

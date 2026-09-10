@@ -130,13 +130,14 @@ def test_list_request_does_not_block_the_event_loop(tmp_path, monkeypatch):
     add_vod(db, "1", "M", "1", num=1)
     invalidate_filter_cache()
 
-    real = xtream._stream_list_response
+    real = xtream._build_stream_list
 
     def slow(state, kind):
         _time.sleep(0.4)  # stand in for a slow host
         return real(state, kind)
 
-    monkeypatch.setattr(xtream, "_stream_list_response", slow)
+    monkeypatch.setattr(xtream, "_build_stream_list", slow)
+    xtream._rendered_list_cache.clear()  # force a real (slow) build
 
     async def scenario():
         ticks = 0
@@ -160,3 +161,44 @@ def test_list_request_does_not_block_the_event_loop(tmp_path, monkeypatch):
     assert status == 200
     # a blocked loop would let through ~0 ticks during the 0.4s build
     assert ticks >= 5
+
+
+def test_rendered_list_is_cached_until_catalogue_changes(tmp_path):
+    """The rendered get_vod_streams body is reused across requests and only
+    rebuilt when a sync / filter-config change invalidates it -- rebuilding
+    a six-figure catalogue per request would wedge a slow host."""
+    from app.api import xtream
+
+    app, db = make_app(tmp_path)
+    add_vod(db, "1", "First", "1", num=1)
+    invalidate_filter_cache()
+    client = TestClient(app)
+
+    builds = {"n": 0}
+    real = xtream._build_stream_list
+
+    def counting(state, kind):
+        builds["n"] += 1
+        return real(state, kind)
+
+    xtream._build_stream_list = counting
+    try:
+        r1 = client.get("/player_api.php", params={
+            "username": "x", "password": "y", "action": "get_vod_streams"})
+        r2 = client.get("/player_api.php", params={
+            "username": "x", "password": "y", "action": "get_vod_streams"})
+        assert r1.content == r2.content
+        assert builds["n"] == 1  # second request served from cache
+
+        # a catalogue change must invalidate it
+        add_vod(db, "2", "Second", "1", num=2)
+        invalidate_filter_cache()
+        from app.core.catalog import data_version
+        data_version.bump()
+
+        r3 = client.get("/player_api.php", params={
+            "username": "x", "password": "y", "action": "get_vod_streams"})
+        assert builds["n"] == 2
+        assert len(r3.json()) == 2
+    finally:
+        xtream._build_stream_list = real

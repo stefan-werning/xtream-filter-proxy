@@ -2,13 +2,18 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import RedirectResponse, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 import httpx
 
-from app.core.catalog import compute_visible_for_kind, data_version
+from app.core.catalog import (
+    compute_visible_for_kind,
+    data_version,
+    register_invalidation_hook,
+)
 from app.core.upstream import UpstreamClient, UpstreamError
 
 logger = logging.getLogger("proxy.api")
@@ -37,14 +42,17 @@ class JSONResponse(Response):
 
     media_type = "application/json"
 
-    def __init__(self, content=None, **kw):
+    def __init__(self, content=None, *, prerendered: bytes | None = None, **kw):
         headers = kw.pop("headers", None) or {}
         headers.setdefault("Access-Control-Allow-Origin", "*")
         headers.setdefault("Pragma", "public")
         headers.setdefault("Cache-Control", "public, must-revalidate, proxy-revalidate")
+        self._prerendered = prerendered
         super().__init__(content, headers=headers, **kw)
 
     def render(self, content) -> bytes:
+        if self._prerendered is not None:
+            return self._prerendered
         body = json.dumps(
             content, ensure_ascii=True, allow_nan=False, separators=(",", ":")
         )
@@ -52,6 +60,15 @@ class JSONResponse(Response):
         # syntax has none, and json.dumps never emits '\/'), so replacing all
         # of them is exactly PHP's default slash-escaping.
         return body.replace("/", "\\/").encode("ascii")
+
+    @classmethod
+    def from_bytes(cls, body: bytes) -> "JSONResponse":
+        """Wrap an already-rendered body (see _rendered_list_response)."""
+        return cls(prerendered=body)
+
+    def rendered_body(self) -> bytes:
+        """The rendered response body, for caching."""
+        return self.body
 
 CATEGORY_ACTIONS = {
     "get_live_categories": "live",
@@ -201,13 +218,10 @@ def _filter_categories(state, data: list, kind: str) -> list:
     return result
 
 
-def _stream_list_response(state, kind: str) -> list:
-    """Blocking: build the filtered get_*_streams / get_series list from the
-    DB. Call via run_in_threadpool -- see player_api().
-
-    The visible-item set comes from the (cached) filter computation, so we
-    only parse the raw_json of rows that will actually be returned.
-    """
+def _build_stream_list(state, kind: str) -> list:
+    """Build the filtered get_*_streams / get_series list from the DB. The
+    visible-item set comes from the (cached) filter computation, so we only
+    parse the raw_json of rows that will actually be returned."""
     db = state.db
     cfg = state.config_mgr.get()
     visible_ids, _ = compute_visible_for_kind(
@@ -218,11 +232,60 @@ def _stream_list_response(state, kind: str) -> list:
     return _renumber(entries)
 
 
-def _categories_response(state, kind: str) -> list:
-    """Blocking: build + filter a get_*_categories list. Call via
-    run_in_threadpool -- see player_api()."""
-    data = _categories_from_db(state.db, kind)
-    return _filter_categories(state, data, kind)
+class _RenderedListCache:
+    """Caches the fully-rendered player_api.php list *bytes* per action,
+    keyed by (config_version, data_version). Building get_vod_streams for a
+    six-figure catalogue is seconds of json.loads + re-serialise even after
+    the visible-row optimisation; the result only changes on a sync or a
+    filter-config edit, both of which bump one of those versions. A cache
+    hit is a dict lookup -- no DB, no JSON work -- which is what keeps a
+    slow host responsive while Smarters Pro hammers it on one connection.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._entries: dict[str, tuple[int, int, bytes]] = {}
+
+    def get(self, action: str, cfg_v: int, data_v: int) -> bytes | None:
+        with self._lock:
+            hit = self._entries.get(action)
+        if hit and hit[0] == cfg_v and hit[1] == data_v:
+            return hit[2]
+        return None
+
+    def set(self, action: str, cfg_v: int, data_v: int, body: bytes) -> None:
+        with self._lock:
+            self._entries[action] = (cfg_v, data_v, body)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_rendered_list_cache = _RenderedListCache()
+# Sync/crawl writes bump data_version and a filter-config edit bumps
+# config_version -- both already invalidate the filter cache, so piggyback
+# on that to drop stale rendered bodies too.
+register_invalidation_hook(_rendered_list_cache.clear)
+
+
+def _rendered_list_response(state, action: str, kind: str, is_category: bool) -> bytes:
+    """Blocking: return the rendered response body for a list/category
+    action, from cache when the catalogue and filter config are unchanged.
+    Call via run_in_threadpool -- see player_api()."""
+    cfg_v = state.config_mgr.version
+    data_v = data_version.value
+    cached = _rendered_list_cache.get(action, cfg_v, data_v)
+    if cached is not None:
+        return cached
+
+    if is_category:
+        payload = _filter_categories(state, _categories_from_db(state.db, kind), kind)
+    else:
+        payload = _build_stream_list(state, kind)
+    body = JSONResponse(payload).rendered_body()
+    _rendered_list_cache.set(action, cfg_v, data_v, body)
+    return body
 
 
 @router.get("/player_api.php")
@@ -243,18 +306,22 @@ async def player_api(request: Request):
     # pipelines its calls and then shows an empty VOD tab). db.conn is
     # thread-local and WAL allows concurrent readers, so this is safe.
     if action in CATEGORY_ACTIONS:
-        kind = CATEGORY_ACTIONS[action]
-        filtered = await run_in_threadpool(_categories_response, state, kind)
-        return JSONResponse(filtered)
+        body = await run_in_threadpool(
+            _rendered_list_response, state, action, CATEGORY_ACTIONS[action], True
+        )
+        return JSONResponse.from_bytes(body)
 
     if action in STREAM_ACTIONS:
-        kind = STREAM_ACTIONS[action]
-        filtered = await run_in_threadpool(_stream_list_response, state, kind)
-        return JSONResponse(filtered)
+        body = await run_in_threadpool(
+            _rendered_list_response, state, action, STREAM_ACTIONS[action], False
+        )
+        return JSONResponse.from_bytes(body)
 
     if action == "get_series":
-        filtered = await run_in_threadpool(_stream_list_response, state, "series")
-        return JSONResponse(filtered)
+        body = await run_in_threadpool(
+            _rendered_list_response, state, "get_series", "series", False
+        )
+        return JSONResponse.from_bytes(body)
 
     # Login/user_info, get_vod_info, get_series_info, and everything else:
     # live passthrough to upstream (no filtering applies).
