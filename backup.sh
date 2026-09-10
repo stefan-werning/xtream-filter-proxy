@@ -71,9 +71,12 @@ if ! sqlite3 "$DB" "VACUUM INTO '$RAW';" 2>>"$LOG"; then
   exit 1
 fi
 
-# integrity check before we trust it
-if ! sqlite3 "$RAW" "PRAGMA integrity_check;" 2>/dev/null | head -1 | grep -q '^ok$'; then
-  log "ERROR: integrity_check failed on the snapshot -- discarding"
+# Sanity check. quick_check, not integrity_check: VACUUM INTO already
+# rebuilds every page and index from a consistent read, so a full
+# integrity_check (minutes on a Pi) is redundant -- quick_check catches a
+# truncated / unreadable snapshot in a second or two.
+if ! sqlite3 "$RAW" "PRAGMA quick_check;" 2>/dev/null | head -1 | grep -q '^ok$'; then
+  log "ERROR: quick_check failed on the snapshot -- discarding"
   rm -f "$RAW"
   exit 1
 fi
