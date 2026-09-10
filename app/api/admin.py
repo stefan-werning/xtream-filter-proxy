@@ -188,10 +188,13 @@ async def get_stats(request: Request):
 
         by_status = {}
         if kind in ("vod", "series"):
+            # Straight GROUP BY on probe_state (idx_probe_kind_status) instead
+            # of joining items for the removed_at check -- a probe row for a
+            # since-removed item is rare and a slightly stale count in the
+            # dashboard breakdown is harmless, not worth a 200k-row join on
+            # every 10s poll.
             cur = db.conn.execute(
-                "SELECT ps.status, COUNT(*) c FROM probe_state ps "
-                "JOIN items i ON i.kind = ps.kind AND i.item_id = ps.item_id "
-                "WHERE ps.kind = ? AND i.removed_at IS NULL GROUP BY ps.status",
+                "SELECT status, COUNT(*) c FROM probe_state WHERE kind = ? GROUP BY status",
                 (kind,),
             )
             by_status = {r["status"]: r["c"] for r in cur.fetchall()}

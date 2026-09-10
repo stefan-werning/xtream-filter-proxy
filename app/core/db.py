@@ -75,6 +75,8 @@ CREATE TABLE IF NOT EXISTS crawl_log (
 CREATE INDEX IF NOT EXISTS idx_items_kind_removed ON items(kind, removed_at);
 CREATE INDEX IF NOT EXISTS idx_items_kind_category ON items(kind, category_id, removed_at);
 CREATE INDEX IF NOT EXISTS idx_probe_status_next ON probe_state(status, next_try);
+CREATE INDEX IF NOT EXISTS idx_probe_kind_status ON probe_state(kind, status, item_id);
+CREATE INDEX IF NOT EXISTS idx_audio_tracks_kind ON audio_tracks(kind, item_id);
 """
 
 

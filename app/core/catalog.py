@@ -24,7 +24,13 @@ class ItemAudioInfo:
 
 
 def _load_audio_info(db: Database, kind: str) -> dict[str, ItemAudioInfo]:
-    """kind in ('vod', 'series'). Returns item_id -> ItemAudioInfo."""
+    """kind in ('vod', 'series'). Returns item_id -> ItemAudioInfo.
+
+    Only items that are actually 'probed' (status in ok/no_audio_info/error)
+    matter here, so filter that in SQL (idx_probe_kind_status) instead of
+    scanning the whole probe_state table -- on a big catalog mid-crawl the
+    probed rows are a small fraction of the total.
+    """
     tracks_by_item: dict[str, list[str]] = {}
     cur = db.conn.execute(
         "SELECT item_id, match_text FROM audio_tracks WHERE kind = ?", (kind,)
@@ -32,14 +38,12 @@ def _load_audio_info(db: Database, kind: str) -> dict[str, ItemAudioInfo]:
     for row in cur.fetchall():
         tracks_by_item.setdefault(row["item_id"], []).append(row["match_text"])
 
-    known_status = {"ok", "no_audio_info", "error"}
-    probed_items: set[str] = set()
-    cur = db.conn.execute(
-        "SELECT item_id, status FROM probe_state WHERE kind = ?", (kind,)
+    probed_items: set[str] = set(
+        row["item_id"] for row in db.conn.execute(
+            "SELECT item_id FROM probe_state WHERE kind = ? AND status IN ('ok', 'no_audio_info', 'error')",
+            (kind,),
+        )
     )
-    for row in cur.fetchall():
-        if row["status"] in known_status:
-            probed_items.add(row["item_id"])
 
     result: dict[str, ItemAudioInfo] = {}
     all_items = set(tracks_by_item.keys()) | probed_items
@@ -73,11 +77,19 @@ def compute_visible_for_kind(
 
     audio_cfg = config.get("audio_filters", {}).get(kind) if kind in ("vod", "series") else None
     on_unknown = config.get("audio_filters", {}).get("on_unknown", "keep")
+    # The audio stage only actually filters anything if there's an
+    # include/exclude pattern, or on_unknown drops unprobed items. If none
+    # of that applies, skip it entirely -- and skip _load_audio_info, which
+    # pulls the whole probe_state + audio_tracks tables into Python (the
+    # single most expensive thing /api/stats does on a large catalog).
+    audio_active = audio_cfg is not None and (
+        audio_cfg.get("include") or audio_cfg.get("exclude") or on_unknown == "drop"
+    )
     compiled_audio = (
-        compile_filter(audio_cfg.get("include", []), audio_cfg.get("exclude", [])) if audio_cfg is not None else None
+        compile_filter(audio_cfg.get("include", []), audio_cfg.get("exclude", [])) if audio_active else None
     )
 
-    audio_info = _load_audio_info(db, kind) if kind in ("vod", "series") else {}
+    audio_info = _load_audio_info(db, kind) if audio_active else {}
 
     overridden_ids: set[str] = set(
         row["item_id"] for row in db.conn.execute(
@@ -104,7 +116,7 @@ def compute_visible_for_kind(
             if not title_passes(name, cat_name, title_cfg, match_category, compiled=compiled_title):
                 continue
 
-            if audio_cfg is not None:
+            if audio_active:
                 info = audio_info.get(item_id, ItemAudioInfo(match_texts=[], has_known_tracks=False))
                 if not audio_passes(
                     info.match_texts, audio_cfg, on_unknown, info.has_known_tracks, compiled=compiled_audio
@@ -154,10 +166,13 @@ def compute_hidden_breakdown_for_kind(
 
     audio_cfg = config.get("audio_filters", {}).get(kind) if kind in ("vod", "series") else None
     on_unknown = config.get("audio_filters", {}).get("on_unknown", "keep")
-    compiled_audio = (
-        compile_filter(audio_cfg.get("include", []), audio_cfg.get("exclude", [])) if audio_cfg is not None else None
+    audio_active = audio_cfg is not None and (
+        audio_cfg.get("include") or audio_cfg.get("exclude") or on_unknown == "drop"
     )
-    audio_info = _load_audio_info(db, kind) if kind in ("vod", "series") else {}
+    compiled_audio = (
+        compile_filter(audio_cfg.get("include", []), audio_cfg.get("exclude", [])) if audio_active else None
+    )
+    audio_info = _load_audio_info(db, kind) if audio_active else {}
 
     overridden_ids: set[str] = set(
         row["item_id"] for row in db.conn.execute(
@@ -186,7 +201,7 @@ def compute_hidden_breakdown_for_kind(
             counts["title"] += 1
             continue
 
-        if audio_cfg is not None:
+        if audio_active:
             info = audio_info.get(item_id, ItemAudioInfo(match_texts=[], has_known_tracks=False))
             if not audio_passes(
                 info.match_texts, audio_cfg, on_unknown, info.has_known_tracks, compiled=compiled_audio
