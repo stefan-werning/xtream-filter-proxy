@@ -237,7 +237,10 @@ Reachable at `http://<host>:8080/`.
 
 - **Dashboard** — crawler status, per-kind progress, ETA, pause/resume,
   manual sync, retry failed probes, reset all probes, recent log with
-  explanations of each status term.
+  explanations of each status term. Updates live over Server-Sent Events
+  (`/api/events`) — status changes and new log lines appear as the crawler
+  produces them, with no polling. Falls back to polling if the SSE
+  connection can't be established.
 - **Settings** — upstream, crawler tuning, crawl schedule, all filter regex
   fields.
 - **Categories** — every category with its item count; uncheck one to hide
@@ -307,6 +310,11 @@ uvicorn app.main:app --host 0.0.0.0 --port 8080 --timeout-graceful-shutdown 130
 Requires Python 3.11+. `ffprobe` (from FFmpeg) is optional — install it if
 you want the fallback prober; the app detects its presence at runtime and
 skips that step when it's missing.
+
+Run a **single** uvicorn worker (the default). The crawler and the live
+dashboard updates assume one process; with `--workers N > 1` you'd get N
+crawlers fighting over the connection slot and the SSE stream would only
+see events from whichever worker handled a given request.
 
 Convenience scripts are included: `./start.sh`, `./stop.sh`, `./restart.sh`.
 They run the app on port **8099** by default (override with `PORT=8080

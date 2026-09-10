@@ -472,9 +472,7 @@ document.querySelectorAll('nav a').forEach(a => a.addEventListener('click', () =
 function linesToArr(s) { return s.split('\n').map(x => x.trim()).filter(Boolean); }
 function arrToLines(a) { return (a || []).join('\n'); }
 
-async function refreshStatus() {
-  const r = await fetch('/api/crawler/status');
-  const j = await r.json();
+function applyStatus(j) {
   const statusLabel = t('status.' + j.status) || j.status;
   $('crawler-status').textContent = statusLabel + (j.paused ? ` (${t('dash.pause').toLowerCase()})` : '');
   $('current-item').textContent = j.current_item ? ('— ' + j.current_item) : '';
@@ -494,6 +492,11 @@ async function refreshStatus() {
       btn.dataset.action = 'pause';
     }
   }
+}
+
+async function refreshStatus() {
+  const r = await fetch('/api/crawler/status');
+  applyStatus(await r.json());
 }
 
 function formatDuration(seconds) {
@@ -634,12 +637,36 @@ function renderLogLegend(logText) {
     .join('&nbsp;&nbsp;');
 }
 
+const LOG_MAX_LINES = 50;
+
+function logLine(l) {
+  return `[${new Date(l.ts * 1000).toLocaleString()}] ${l.level}: ${l.message}`;
+}
+
 async function refreshLog() {
-  const r = await fetch('/api/logs?limit=50');
+  const r = await fetch('/api/logs?limit=' + LOG_MAX_LINES);
   const j = await r.json();
-  const text = j.map(l => `[${new Date(l.ts*1000).toLocaleString()}] ${l.level}: ${l.message}`).join('\n');
-  $('log').textContent = text;
+  // API returns newest-first; show oldest-first so it reads like a normal
+  // log and new SSE lines append naturally at the bottom.
+  const text = j.slice().reverse().map(logLine).join('\n');
+  const el = $('log');
+  el.textContent = text;
+  el.scrollTop = el.scrollHeight;
   renderLogLegend(text);
+}
+
+// Append a single new line pushed over SSE, keeping the box capped and
+// auto-scrolled if the user was already at the bottom.
+function appendLogLine(l) {
+  const el = $('log');
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+  let lines = el.textContent ? el.textContent.split('\n') : [];
+  lines.push(logLine(l));
+  if (lines.length > LOG_MAX_LINES) lines = lines.slice(lines.length - LOG_MAX_LINES);
+  const text = lines.join('\n');
+  el.textContent = text;
+  renderLogLegend(text);
+  if (atBottom) el.scrollTop = el.scrollHeight;
 }
 
 $('btn-pause-toggle').onclick = async () => {
@@ -961,29 +988,28 @@ $('del-kind').onchange = loadDelivered;
 
 loadSettings();
 
-// Self-scheduling poll loop instead of a fixed setInterval: on a slow host
-// (e.g. a Raspberry Pi under crawler load) a fixed interval keeps firing
-// even while the previous round's requests are still in flight, piling up
-// overlapping fetches. This waits for the current round to finish before
-// scheduling the next one. The three requests run one after another rather
-// than in parallel so a weak CPU isn't hit with all three at once (which
-// made the whole page feel frozen). Each fetch flips its own inline
-// spinner on only for the duration of that request, so the spinner
-// reflects an actually-in-flight poll and isn't just permanently spinning.
+// ---------------------------------------------------------------------------
+// Live updates: SSE (/api/events) with a polling fallback.
+//
+// Primary path is Server-Sent Events -- the crawler pushes status changes
+// and log lines as they happen, plus a "stats_dirty" nudge that triggers a
+// single /api/stats fetch. This means no request traffic at all while the
+// crawler is idle, and instant feedback while it's working.
+//
+// If SSE can't connect (proxy strips it, very old browser), or drops and
+// won't come back, we fall back to the old self-scheduling poll loop.
+// ---------------------------------------------------------------------------
+
 const POLL_INTERVAL_MS = 10000;
 let pollTimer = null;
 let pollInFlight = false;
-async function pollLoop() {
-  if (pollInFlight) return;          // guard against overlapping invocations
-  if (document.hidden) {             // tab backgrounded -- don't poll, just re-check later
-    pollTimer = setTimeout(pollLoop, POLL_INTERVAL_MS);
-    return;
-  }
+let pollingActive = false;
+
+async function pollOnce() {
+  if (pollInFlight || document.hidden) return;
   pollInFlight = true;
   try {
     await refreshStatus();
-    // Progress and log only matter while the dashboard is visible; skip
-    // their (heavier) requests otherwise so the loop stays cheap.
     if ($('dashboard').classList.contains('active')) {
       await refreshStats();
       await refreshLog();
@@ -992,22 +1018,96 @@ async function pollLoop() {
     console.error('poll failed', e);
   } finally {
     pollInFlight = false;
-    clearTimeout(pollTimer);
-    pollTimer = setTimeout(pollLoop, POLL_INTERVAL_MS);
   }
 }
 
-// When the tab comes back to the foreground (Android Chrome throttles or
-// freezes background timers, so the loop may have been stalled for a long
-// time), run a poll right away instead of waiting out the pending timer.
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) {
-    clearTimeout(pollTimer);
-    pollLoop();
+function startPolling() {
+  if (pollingActive) return;
+  pollingActive = true;
+  const loop = async () => {
+    await pollOnce();
+    if (pollingActive) pollTimer = setTimeout(loop, POLL_INTERVAL_MS);
+  };
+  loop();
+}
+
+function stopPolling() {
+  pollingActive = false;
+  clearTimeout(pollTimer);
+}
+
+// Coalesce stats_dirty bursts: the crawler can bump data_version several
+// times in a few seconds, but /api/stats is the expensive call.
+let statsDirtyTimer = null;
+function scheduleStatsRefresh() {
+  if (statsDirtyTimer) return;
+  statsDirtyTimer = setTimeout(() => {
+    statsDirtyTimer = null;
+    if (!document.hidden && $('dashboard').classList.contains('active')) refreshStats();
+  }, 1500);
+}
+
+let es = null;
+let esRetryTimer = null;
+let esRetryDelay = 2000;
+
+function connectSSE() {
+  if (es) { es.close(); es = null; }
+  try {
+    es = new EventSource('/api/events');
+  } catch (e) {
+    startPolling();
+    return;
   }
+
+  es.addEventListener('open', () => {
+    esRetryDelay = 2000;
+    stopPolling();               // SSE is authoritative while connected
+    // Pull the heavier data once on (re)connect so we're not stale.
+    refreshStats();
+    refreshLog();
+  });
+
+  es.addEventListener('status', (ev) => {
+    try { applyStatus(JSON.parse(ev.data)); } catch (e) {}
+  });
+
+  es.addEventListener('log', (ev) => {
+    try { appendLogLine(JSON.parse(ev.data)); } catch (e) {}
+  });
+
+  es.addEventListener('stats_dirty', () => scheduleStatsRefresh());
+
+  es.addEventListener('error', () => {
+    // EventSource retries on its own, but if it's really gone we want the
+    // poll fallback running in the meantime.
+    if (es && es.readyState === EventSource.CLOSED) {
+      es = null;
+      startPolling();
+      clearTimeout(esRetryTimer);
+      esRetryTimer = setTimeout(connectSSE, esRetryDelay);
+      esRetryDelay = Math.min(esRetryDelay * 2, 30000);
+    } else {
+      // transient -- keep polling until 'open' fires again
+      startPolling();
+    }
+  });
+}
+
+// On returning to the foreground, refresh immediately (SSE may have been
+// frozen by the browser) and make sure a transport is running.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  refreshStatus();
+  if ($('dashboard').classList.contains('active')) { refreshStats(); refreshLog(); }
+  if ((!es || es.readyState === EventSource.CLOSED) && !pollingActive) connectSSE();
 });
 
-pollLoop();
+if (window.EventSource) {
+  connectSSE();
+} else {
+  startPolling();
+}
 </script>
 </body>
 </html>

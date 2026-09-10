@@ -259,6 +259,10 @@ def sync_probe_state_with_category_filters(db: Database, config: dict) -> None:
 class DataVersion:
     """Monotonic counter bumped whenever items/audio_tracks change (sync or
     crawl writes), so the filter cache can be invalidated cheaply.
+
+    A bump also means the dashboard's Progress numbers are potentially
+    stale, so it emits a lightweight "stats-dirty" event -- the SSE client
+    reacts by fetching /api/stats once, instead of polling it on a timer.
     """
 
     def __init__(self):
@@ -266,6 +270,12 @@ class DataVersion:
 
     def bump(self) -> None:
         self._v += 1
+        try:
+            from app.core.events import broker
+
+            broker.publish("stats_dirty", {"v": self._v})
+        except Exception:
+            pass
 
     @property
     def value(self) -> int:

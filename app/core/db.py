@@ -145,11 +145,20 @@ class Database:
             )
 
     def log(self, level: str, message: str) -> None:
+        ts = int(time.time())
         with self.cursor() as cur:
             cur.execute(
                 "INSERT INTO crawl_log (ts, level, message) VALUES (?, ?, ?)",
-                (int(time.time()), level, message),
+                (ts, level, message),
             )
+        # Push the new line to any connected dashboard (SSE). Import here to
+        # avoid a module-load cycle and to keep db.py free of app deps.
+        try:
+            from app.core.events import broker
+
+            broker.publish("log", {"ts": ts, "level": level, "message": message})
+        except Exception:
+            pass
 
     def recent_logs(self, limit: int = 50) -> list[sqlite3.Row]:
         cur = self.conn.execute(

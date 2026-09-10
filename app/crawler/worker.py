@@ -65,12 +65,31 @@ class CrawlerWorker:
 
     def pause(self) -> None:
         self.db.set_setting("crawler_paused", "1")
+        self._publish_status_snapshot()
 
     def resume(self) -> None:
         self.db.set_setting("crawler_paused", "0")
+        self._publish_status_snapshot()
 
     def is_paused(self) -> bool:
         return self.db.get_setting("crawler_paused", "0") == "1"
+
+    def _publish_status_snapshot(self) -> None:
+        """Push the current status over SSE now, so a pause/resume click is
+        reflected on the dashboard immediately instead of on the crawler
+        loop's next iteration (which may be seconds away, or blocked in a
+        probe)."""
+        with self._lock:
+            status, current_item = self._status, self._current_item
+        try:
+            from app.core.events import broker
+
+            broker.publish(
+                "status",
+                {"status": status, "current_item": current_item, "paused": self.is_paused()},
+            )
+        except Exception:
+            pass
 
     def status(self) -> dict:
         with self._lock:
@@ -140,8 +159,19 @@ class CrawlerWorker:
 
     def _set_status(self, status: str, current_item: str | None = None) -> None:
         with self._lock:
+            changed = (status != self._status) or (current_item != self._current_item)
             self._status = status
             self._current_item = current_item
+        if changed:
+            try:
+                from app.core.events import broker
+
+                broker.publish(
+                    "status",
+                    {"status": status, "current_item": current_item, "paused": self.is_paused()},
+                )
+            except Exception:
+                pass
 
     def _run_loop(self) -> None:
         try:

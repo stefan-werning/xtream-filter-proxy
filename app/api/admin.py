@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import json
 import re
 import time
 
 from fastapi import APIRouter, Body, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.core.catalog import (
     compute_hidden_breakdown_for_kind,
@@ -13,9 +15,64 @@ from app.core.catalog import (
     invalidate_filter_cache,
 )
 from app.core.config import ConfigError
+from app.core.events import SHUTDOWN, broker
 from app.core.filters import audio_passes, title_passes
 
 router = APIRouter(prefix="/api")
+
+# SSE heartbeat interval. Keeps proxies from timing the connection out and
+# lets the client notice a dead connection between real events.
+_SSE_KEEPALIVE_SECONDS = 20
+
+
+@router.get("/events")
+async def events(request: Request):
+    """Server-Sent Events stream of dashboard updates: crawler status
+    changes, new log lines, and a 'stats_dirty' nudge telling the client to
+    refetch /api/stats. Replaces timer-based polling; the client keeps a
+    polling fallback for when this connection can't be established.
+    """
+    queue = broker.subscribe()
+
+    async def event_stream():
+        # Prime the stream so the client sees state immediately on connect
+        # rather than waiting for the next change.
+        worker = request.app.state.crawler
+        st = worker.status()
+        st["paused"] = worker.is_paused()
+        yield _sse_frame("status", st)
+        yield _sse_frame("stats_dirty", {"v": data_version.value})
+
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    payload = await asyncio.wait_for(queue.get(), timeout=_SSE_KEEPALIVE_SECONDS)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                if payload is SHUTDOWN:
+                    break
+                # payload is already a JSON string {"type":..., "data":...}
+                obj = json.loads(payload)
+                yield _sse_frame(obj["type"], obj["data"])
+        finally:
+            broker.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # disable nginx proxy buffering
+        },
+    )
+
+
+def _sse_frame(event_type: str, data) -> str:
+    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 
 @router.get("/crawler/status")
