@@ -207,8 +207,8 @@ the `--port` flag when running directly).
 | --- | --- |
 | `upstream` | Provider URL, credentials, timeout, user-agent |
 | `database` | SQLite file path |
-| `ffprobe` | Enable/disable the ffprobe fallback prober, its timeout and binary path |
-| `crawler` | Request pacing, connection-slot safety margin (`reserve_slots`), sync interval, retention (`purge_after_days`) and log rotation (`log_max_age_days`, `log_max_rows`) |
+| `ffprobe` | Enable/disable the ffprobe fallback prober (on by default), its timeout and binary path |
+| `crawler` | Request pacing, `reserve_slots` (connections to keep free for your live viewing — **set 0 on a single-connection account** or ffprobe never runs), sync interval, retention (`purge_after_days`) and log rotation (`log_max_age_days`, `log_max_rows`) |
 | `crawl_schedule` | Day/time windows the crawler may run in (or `enabled: false` to run continuously) |
 | `title_filters` | Per-kind (`live`/`vod`/`series`) include/exclude regex lists, matched against the title (optionally also the category name) |
 | `category_filters` | Per-kind list of category IDs to hide entirely — easiest to manage from the Categories tab |
@@ -267,15 +267,19 @@ talks to. Two sources are used, in this order:
 
 1. **The provider API** (`get_vod_info` / `get_series_info`) — fast, no
    connection slot needed, but not always present or complete.
-2. **`ffprobe` fallback** (optional, off by default) — opens a real
-   connection to the stream and reads its header. Accurate, but slow and it
-   occupies one of your account's connection slots.
+2. **`ffprobe` fallback** (on by default; needs the `ffprobe` binary and a
+   free connection slot) — opens a real connection to the stream and reads
+   its header. Accurate, but slow and it occupies one of your account's
+   connection slots while it runs. Turn it off in Settings if you'd rather
+   rely on API metadata only.
 
 Known limitations:
 
 - **Not all panels expose audio metadata via the API.** Many omit
-  `audio`/`streams` entirely. Without `ffprobe`, such items fall back to
-  `on_unknown`.
+  `audio`/`streams` entirely. If `ffprobe` is off, or can't get a usable
+  stream URL for the title (some series responses carry no episode list),
+  such items fall back to `on_unknown` — a `no_audio_info` result then
+  means "couldn't determine", not "definitely has no audio".
 - **Language tags are free text set by the uploader** — `ger`, `deu`,
   `german`, `Deutsch`, or nothing at all. The regex approach exists
   precisely so you can adapt to whatever vocabulary your provider uses;
@@ -307,9 +311,11 @@ cp config.example.yaml config.yaml
 uvicorn app.main:app --host 0.0.0.0 --port 8080 --timeout-graceful-shutdown 130
 ```
 
-Requires Python 3.11+. `ffprobe` (from FFmpeg) is optional — install it if
-you want the fallback prober; the app detects its presence at runtime and
-skips that step when it's missing.
+Requires Python 3.11+. The ffprobe fallback is on by default; install
+`ffprobe` (from FFmpeg) for it, or set `ffprobe.enabled: false`. The app
+detects the binary at runtime and skips that step if it's missing, so a
+missing `ffprobe` is harmless — you just lose the fallback. (The Docker
+image bundles it.)
 
 Run a **single** uvicorn worker (the default). The crawler and the live
 dashboard updates assume one process; with `--workers N > 1` you'd get N

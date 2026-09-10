@@ -17,10 +17,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "server": {"host": "0.0.0.0", "port": 8080},
     "database": {"path": "./data/proxy.db"},
-    "ffprobe": {"enabled": False, "timeout_seconds": 25, "binary": "ffprobe"},
+    "ffprobe": {"enabled": True, "timeout_seconds": 25, "binary": "ffprobe"},
     "crawler": {
         "request_delay_seconds": 1.0,
-        "reserve_slots": 1,
+        "reserve_slots": 0,
         "slot_recheck_seconds": 60,
         "sync_interval_minutes": 360,
         "purge_after_days": 30,

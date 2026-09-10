@@ -14,14 +14,24 @@ server:
 database:
   path: "./data/proxy.db"
 
+# ffprobe fallback: when the provider API doesn't report audio tracks for a
+# title, open the stream and read them directly. More accurate, but each
+# check uses one of the account's connection slots for a few seconds.
+# Requires the ffprobe binary (from FFmpeg) on the host / in the image.
 ffprobe:
-  enabled: false
+  enabled: true
   timeout_seconds: 25
   binary: "ffprobe"
 
 crawler:
   request_delay_seconds: 1.0
-  reserve_slots: 1
+  # How many of the account's connections to keep free for your own live
+  # viewing. If the account allows only one connection, set this to 0 --
+  # otherwise the crawler can never run ffprobe (0 slots left) and falls
+  # back to API metadata only. With 0, an ffprobe check may briefly collide
+  # with a live stream; the crawler still skips ffprobe while a slot is
+  # actually in use.
+  reserve_slots: 0
   slot_recheck_seconds: 60
   sync_interval_minutes: 360
   purge_after_days: 30
