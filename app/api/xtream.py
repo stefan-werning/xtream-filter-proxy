@@ -251,6 +251,16 @@ async def player_api(request: Request):
     params = dict(request.query_params)
     action = params.get("action", "")
 
+    # DEBUG (revert with the debug knobs): trace every player_api call so we
+    # can see exactly what the Google-TV client asks for and in what order.
+    if state.db.get_setting("debug_trace", ""):
+        ua = request.headers.get("user-agent", "?")
+        ip = request.headers.get("x-forwarded-for") or (
+            request.client.host if request.client else "?"
+        )
+        qs = "&".join(f"{k}={v}" for k, v in params.items() if k not in ("username", "password"))
+        state.db.log("info", f"[trace] {ip} {ua[:40]} action={action or '(login)'} {qs}")
+
     upstream_params = {k: v for k, v in params.items() if k not in ("username", "password")}
 
     # List/category actions are filtered against the local cache only --
@@ -335,6 +345,8 @@ async def series_stream(request: Request, user: str, password: str, rest: str):
 @router.get("/xmltv.php")
 async def xmltv(request: Request):
     state = _get_app_state(request)
+    if state.db.get_setting("debug_trace", ""):
+        state.db.log("info", "[trace] xmltv.php")
     cfg = state.config_mgr.get()
     client = UpstreamClient(cfg)
     url = client.build_url("xmltv.php", {})
