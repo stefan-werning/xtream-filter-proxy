@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse
 
 from app.api.admin import router as admin_router
 from app.api.xtream import router as xtream_router
+from app.api.xtream import warm_rendered_list_cache
 from app.core.config import ConfigManager
 from app.core.db import Database
 from app.core.events import broker
@@ -61,7 +62,23 @@ async def lifespan(app: FastAPI):
 
     crawler.start()
     db.log("info", "application started")
+
+    # Warm the rendered player_api list caches in the background so the
+    # first client request after a restart is a cache hit, not a ~20s cold
+    # build on a slow host (Smarters Pro on Google TV times out otherwise).
+    # Non-blocking: startup completes immediately; a request that lands
+    # mid-warmup just does the build itself.
+    async def _warmup():
+        try:
+            await asyncio.to_thread(warm_rendered_list_cache, app.state)
+            logging.getLogger("proxy.api").info("rendered list caches warmed")
+        except Exception:
+            logging.getLogger("proxy.api").warning("cache warmup errored", exc_info=True)
+
+    warmup_task = asyncio.create_task(_warmup())
+
     yield
+    warmup_task.cancel()
     broker.shutdown()  # also here, for the signal-less shutdown paths
     logging.getLogger("proxy.crawler").info("shutting down: waiting for in-flight probe to finish...")
     finished = crawler.stop(timeout=120)

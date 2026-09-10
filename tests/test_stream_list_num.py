@@ -202,3 +202,29 @@ def test_rendered_list_is_cached_until_catalogue_changes(tmp_path):
         assert len(r3.json()) == 2
     finally:
         xtream._build_stream_list = real
+
+
+def test_warmup_populates_the_rendered_cache(tmp_path):
+    """warm_rendered_list_cache builds every list/category response up front
+    so the first real request after a restart is a cache hit."""
+    from types import SimpleNamespace
+
+    from app.api import xtream
+
+    app, db = make_app(tmp_path)
+    add_vod(db, "1", "M", "1", num=1)
+    invalidate_filter_cache()
+
+    xtream._rendered_list_cache.clear()
+    xtream.warm_rendered_list_cache(app.state)
+
+    builds = {"n": 0}
+    real = xtream._build_stream_list
+    xtream._build_stream_list = lambda s, k: (builds.__setitem__("n", builds["n"] + 1) or real(s, k))
+    try:
+        r = TestClient(app).get("/player_api.php", params={
+            "username": "x", "password": "y", "action": "get_vod_streams"})
+        assert r.status_code == 200
+        assert builds["n"] == 0  # served straight from the warmed cache
+    finally:
+        xtream._build_stream_list = real

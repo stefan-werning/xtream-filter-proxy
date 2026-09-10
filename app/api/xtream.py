@@ -288,6 +288,27 @@ def _rendered_list_response(state, action: str, kind: str, is_category: bool) ->
     return body
 
 
+# (action, kind, is_category) for every list/category endpoint, so warmup
+# and any future bulk operation can iterate them.
+_ALL_LIST_ACTIONS = (
+    *((a, k, True) for a, k in CATEGORY_ACTIONS.items()),
+    *((a, k, False) for a, k in STREAM_ACTIONS.items()),
+    ("get_series", "series", False),
+)
+
+
+def warm_rendered_list_cache(state) -> None:
+    """Build every list/category response once so the first real request
+    after a (re)start is a cache hit rather than a ~20s cold build on a
+    slow host. Blocking -- run it in a thread; safe to call repeatedly.
+    """
+    for action, kind, is_category in _ALL_LIST_ACTIONS:
+        try:
+            _rendered_list_response(state, action, kind, is_category)
+        except Exception:
+            logger.warning("cache warmup failed for %s", action, exc_info=True)
+
+
 @router.get("/player_api.php")
 async def player_api(request: Request):
     state = _get_app_state(request)
