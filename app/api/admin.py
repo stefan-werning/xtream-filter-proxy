@@ -132,17 +132,6 @@ async def crawler_reprobe(request: Request, kind: str = Body(...), item_id: str 
     return JSONResponse({"ok": True})
 
 
-@router.get("/settings/{key}")
-async def get_setting(request: Request, key: str):
-    return JSONResponse({"key": key, "value": request.app.state.db.get_setting(key)})
-
-
-@router.post("/settings/set")
-async def set_setting(request: Request, key: str = Body(...), value: str = Body("")):
-    request.app.state.db.set_setting(key, value)
-    return JSONResponse({"ok": True, "key": key, "value": value})
-
-
 @router.post("/crawler/reprobe-matching")
 async def crawler_reprobe_matching(
     request: Request,

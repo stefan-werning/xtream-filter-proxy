@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import RedirectResponse, StreamingResponse
 import httpx
 
@@ -16,12 +16,23 @@ router = APIRouter()
 
 
 class JSONResponse(Response):
-    """Match a real Xtream panel's player_api.php response as closely as we
-    can: ASCII-escaped JSON body, `application/json` WITHOUT a charset param,
-    and the same CORS / cache headers the panel sends. Smarters Pro on
-    Google TV renders VOD from a direct panel connection but not from this
-    proxy -- the entry payload is byte-identical, so the envelope is the
-    only thing left that can differ."""
+    r"""Serialise player_api.php responses byte-for-byte like a real Xtream
+    panel, whose PHP `json_encode` output this proxy stands in for:
+
+      * ASCII-escaped (`ensure_ascii`) with compact `,`/`:` separators
+      * forward slashes escaped as ``\/`` -- PHP does this by default
+        (JSON_UNESCAPED_SLASHES off), so panel output is ``https:\/\/...``
+      * ``Content-Type: application/json`` with no charset parameter
+      * the panel's ``Access-Control-Allow-Origin`` / ``Pragma`` /
+        ``Cache-Control`` headers
+
+    IPTV Smarters Pro on Google TV drops the entire get_vod_streams list --
+    no movies, no VOD categories in the Movies tab -- when the slashes in
+    the stream_icon URLs are not escaped, even though the JSON is valid.
+    A direct panel connection works; matching its serialisation fixes it.
+    (Its phone build and our get_live_streams / get_series are unaffected,
+    but serving every list identically keeps the behaviour consistent.)
+    """
 
     media_type = "application/json"
 
@@ -33,9 +44,13 @@ class JSONResponse(Response):
         super().__init__(content, headers=headers, **kw)
 
     def render(self, content) -> bytes:
-        return json.dumps(
+        body = json.dumps(
             content, ensure_ascii=True, allow_nan=False, separators=(",", ":")
-        ).encode("ascii")
+        )
+        # In JSON a literal '/' only ever appears inside a string (structural
+        # syntax has none, and json.dumps never emits '\/'), so replacing all
+        # of them is exactly PHP's default slash-escaping.
+        return body.replace("/", "\\/").encode("ascii")
 
 CATEGORY_ACTIONS = {
     "get_live_categories": "live",
@@ -113,113 +128,13 @@ def _as_float(v):
         return 0.0
 
 
-_STRICT_VOD_KEYS = (
-    "num", "name", "stream_type", "stream_id", "stream_icon",
-    "rating", "rating_5based", "added", "category_id",
-    "container_extension", "custom_sid", "direct_source",
-)
-
-# Typographic characters -> plain ASCII, for the _ascii debug mode.
-_ASCII_FOLD = {
-    "‘": "'", "’": "'", "‚": ",", "‛": "'",
-    "“": '"', "”": '"', "„": '"',
-    "–": "-", "—": "-", "―": "-", "‐": "-", "‒": "-",
-    "…": "...", " ": " ", " ": " ", "－": "-",
-}
-
-
-def _strict_vod_entry(e: dict) -> dict:
-    """Only the fields in the documented Xtream get_vod_streams shape, with
-    the documented types (custom_sid / direct_source as '' not null)."""
-    out = {k: e.get(k) for k in _STRICT_VOD_KEYS if k in e}
-    out.setdefault("num", 0)
-    out.setdefault("name", "")
-    out.setdefault("stream_type", "movie")
-    out.setdefault("category_id", "")
-    out.setdefault("container_extension", "mp4")
-    for k in ("custom_sid", "direct_source"):
-        if out.get(k) is None:
-            out[k] = ""
-    if out.get("stream_icon") is None:
-        out["stream_icon"] = ""
-    if out.get("rating") is None:
-        out["rating"] = ""
-    if out.get("rating_5based") is None:
-        out["rating_5based"] = 0.0
-    if out.get("added") is None:
-        out["added"] = ""
-    return out
-
-
-def _apply_vod_debug(db, entries: list) -> list:
-    """Debug knobs for the Google-TV empty-VOD-list issue, toggled via
-    settings keys (no rebuild): set with
-      /api/settings/set  {"key": "debug_vod", "value": "strict,limit=2000,ascii"}
-    parts:
-      strict        -> only the documented Xtream fields
-      limit=N       -> first N entries only
-      ascii         -> fold typographic chars in name to plain ASCII
-    Empty / unset -> untouched.
-    """
-    raw = db.get_setting("debug_vod", "") or ""
-    parts = {p.strip() for p in raw.split(",") if p.strip()}
-    if not parts:
-        return entries
-
-    if any(p == "strict" for p in parts):
-        entries = [_strict_vod_entry(e) for e in entries]
-
-    for p in parts:
-        if p.startswith("limit="):
-            try:
-                entries = entries[: int(p.split("=", 1)[1])]
-            except ValueError:
-                pass
-
-    if "ascii" in parts:
-        for e in entries:
-            n = e.get("name")
-            if isinstance(n, str):
-                e["name"] = "".join(_ASCII_FOLD.get(c, c) for c in n)
-
-    for p in parts:
-        if p.startswith("ext="):
-            forced = p.split("=", 1)[1]
-            for e in entries:
-                e["container_extension"] = forced
-
-    if "catids_str" in parts:
-        # category_ids as a string array matching category_id's type
-        for e in entries:
-            cid = e.get("category_id")
-            if cid is not None:
-                e["category_ids"] = [str(cid)]
-    if "no_catids" in parts:
-        for e in entries:
-            e.pop("category_ids", None)
-
-    if "r5_str" in parts:
-        # rating_5based as a string, like get_series serves it
-        for e in entries:
-            if "rating_5based" in e and e["rating_5based"] is not None:
-                e["rating_5based"] = str(e["rating_5based"])
-    if "ids_str" in parts:
-        # stream_id as a string
-        for e in entries:
-            if e.get("stream_id") is not None:
-                e["stream_id"] = str(e["stream_id"])
-
-    return entries
-
-
 def _normalize_vod_types(entry: dict) -> None:
-    """Xtream panels (this one's upstream included) are inconsistent about
-    the JSON type of a few get_vod_streams fields -- across entries of the
-    *same* list, rating_5based arrives as float, int OR string; tmdb as
-    string or int. Lenient clients cope; strict ones (Smarters Pro on
-    Google TV) deserialise into typed objects and drop the whole list on
-    the first type mismatch. Pin the known offenders. get_series is left
-    alone -- its types are already consistent and it works."""
+    """Upstream is inconsistent about the JSON type of a few
+    get_vod_streams fields -- across entries of the *same* list,
+    rating_5based arrives as float, int OR string and tmdb as string or
+    int. Give every entry the same types so a client deserialising into a
+    typed model doesn't choke. get_series is left alone; its types are
+    already consistent."""
     if "rating_5based" in entry:
         entry["rating_5based"] = _as_float(entry["rating_5based"])
     if entry.get("rating") is not None:
@@ -286,20 +201,6 @@ async def player_api(request: Request):
     params = dict(request.query_params)
     action = params.get("action", "")
 
-    # DEBUG (revert with the debug knobs): trace every player_api call so we
-    # can see exactly what the Google-TV client asks for and in what order.
-    if state.db.get_setting("debug_trace", ""):
-        ua = request.headers.get("user-agent", "?")
-        ip = request.headers.get("x-forwarded-for") or (
-            request.client.host if request.client else "?"
-        )
-        qs = "&".join(f"{k}={v}" for k, v in params.items() if k not in ("username", "password"))
-        state.db.log("info", f"[trace] {ip} {ua[:40]} action={action or '(login)'} {qs}")
-        if state.db.get_setting("debug_trace", "") == "headers":
-            hdrs = "; ".join(f"{k}={v}" for k, v in request.headers.items()
-                             if k.lower() not in ("authorization", "cookie"))
-            state.db.log("info", f"[trace-hdr] {action or '(login)'} <- {hdrs}")
-
     upstream_params = {k: v for k, v in params.items() if k not in ("username", "password")}
 
     # List/category actions are filtered against the local cache only --
@@ -312,22 +213,8 @@ async def player_api(request: Request):
 
     if action in STREAM_ACTIONS:
         kind = STREAM_ACTIONS[action]
-        # DEBUG: serve the provider's live get_vod_streams verbatim, only
-        # narrowed to the categories our filter would allow -- entries 100%
-        # untouched (provider num, category_ids, types). Isolates whether
-        # our transform pipeline is what the Google-TV client rejects.
-        if kind == "vod" and state.db.get_setting("debug_vod", "") == "upstream_raw":
-            client = UpstreamClient(state.config_mgr.get())
-            up_list = await client.player_api({"action": "get_vod_streams"})
-            allowed = {c["category_id"] for c in _filter_categories(
-                state, _categories_from_db(state.db, "vod"), "vod")}
-            out = [e for e in up_list if isinstance(e, dict)
-                   and str(e.get("category_id")) in allowed]
-            return JSONResponse(out)
         data = _db_list(state.db, kind)
         filtered = _filter_stream_list(state, data, kind)
-        if kind == "vod":
-            filtered = _apply_vod_debug(state.db, filtered)
         return JSONResponse(filtered)
 
     if action == "get_series":
@@ -396,8 +283,6 @@ async def series_stream(request: Request, user: str, password: str, rest: str):
 @router.get("/xmltv.php")
 async def xmltv(request: Request):
     state = _get_app_state(request)
-    if state.db.get_setting("debug_trace", ""):
-        state.db.log("info", "[trace] xmltv.php")
     cfg = state.config_mgr.get()
     client = UpstreamClient(cfg)
     url = client.build_url("xmltv.php", {})

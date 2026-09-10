@@ -27,13 +27,16 @@ def make_app(tmp_path):
     return app, db
 
 
-def add_vod(db, item_id, name, category_id, num):
+def add_vod(db, item_id, name, category_id, num, stream_icon=None):
     now = int(time.time())
-    raw = json.dumps({
+    entry = {
         "num": num, "name": name, "stream_id": int(item_id),
         "stream_type": "movie", "category_id": category_id,
         "container_extension": "mkv",
-    })
+    }
+    if stream_icon is not None:
+        entry["stream_icon"] = stream_icon
+    raw = json.dumps(entry)
     with db.cursor() as cur:
         cur.execute(
             "INSERT INTO items (kind,item_id,name,category_id,container_ext,raw_json,"
@@ -74,24 +77,33 @@ def test_num_is_renumbered_1_to_n(tmp_path):
     assert all(isinstance(e["stream_id"], int) for e in items)
 
 
-def test_response_matches_panel_envelope(tmp_path):
-    """Match a real Xtream panel's player_api.php envelope: ASCII-escaped
-    JSON body under `application/json` (no charset param) plus the panel's
-    CORS/cache headers. A strict client (Smarters Pro on Google TV) renders
-    VOD from a direct panel connection but not from this proxy."""
+def test_response_matches_panel_serialisation(tmp_path):
+    """player_api.php must be serialised byte-for-byte like a real Xtream
+    panel (PHP json_encode): ASCII-escaped, forward slashes as \\/,
+    `application/json` with no charset param, panel CORS/cache headers.
+    Smarters Pro on Google TV drops the whole get_vod_streams list (no
+    movies, no VOD categories in the Movies tab) when the slashes in the
+    stream_icon URLs are left unescaped."""
     app, db = make_app(tmp_path)
-    add_vod(db, "1", "DE - Brüder & Schwestern (Ölkrieg)", "1", num=99)
+    add_vod(db, "1", "DE - Brüder & Schwestern (Ölkrieg)", "1", num=99,
+            stream_icon="https://img.example/t/p/w600/abc.jpg")
     invalidate_filter_cache()
 
     r = TestClient(app).get("/player_api.php", params={
         "username": "x", "password": "y", "action": "get_vod_streams",
     })
     assert r.status_code == 200
-    ct = r.headers["content-type"].lower()
-    assert ct == "application/json"  # no charset param, like the panel
+    assert r.headers["content-type"].lower() == "application/json"  # no charset
     assert r.headers.get("access-control-allow-origin") == "*"
-    # raw body is pure ASCII -- umlauts are \uXXXX escapes
-    r.content.decode("ascii")  # would raise if any byte > 0x7f
-    assert b"\\u00fc" in r.content  # ü
-    # and it still parses back to the right string
-    assert r.json()[0]["name"] == "DE - Brüder & Schwestern (Ölkrieg)"
+    assert r.headers.get("cache-control") == "public, must-revalidate, proxy-revalidate"
+
+    # raw body is pure ASCII with escaped slashes, like the panel
+    body = r.content.decode("ascii")  # raises if any byte > 0x7f
+    assert "\\u00fc" in body  # ü
+    assert "https:\\/\\/img.example\\/t\\/p\\/w600\\/abc.jpg" in body
+    assert "https://" not in body  # no bare slashes anywhere
+
+    # and it still parses back correctly
+    e = r.json()[0]
+    assert e["name"] == "DE - Brüder & Schwestern (Ölkrieg)"
+    assert e["stream_icon"] == "https://img.example/t/p/w600/abc.jpg"
