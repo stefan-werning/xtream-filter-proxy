@@ -69,7 +69,7 @@ def _get_app_state(request: Request):
     return request.app.state
 
 
-def _db_list(db, kind: str) -> list[dict]:
+def _db_list(db, kind: str, only_item_ids: set[str] | None = None) -> list[dict]:
     """Builds an Xtream-shaped list straight from the local cache. List
     actions (get_*_streams, get_series, get_*_categories) must NEVER wait on
     an upstream request -- they are served entirely from the DB, which the
@@ -81,15 +81,38 @@ def _db_list(db, kind: str) -> list[dict]:
     being stripped down to just the handful of fields our filtering needs.
     Falls back to a minimal hand-built entry for rows synced before raw_json
     existed.
+
+    `only_item_ids`, when given, restricts the result to those item_ids and,
+    crucially, skips json.loads for every other row -- the caller already
+    knows which items are visible (from the cached filter set), and parsing
+    the raw_json of a whole 100k-row VOD catalogue only to discard most of
+    it takes tens of seconds on a Raspberry Pi.
     """
-    cur = db.conn.execute(
-        "SELECT item_id, name, category_id, container_ext, raw_json FROM items "
-        "WHERE kind = ? AND removed_at IS NULL",
-        (kind,),
-    )
+    if only_item_ids is not None:
+        # Pull just the visible rows -- reading (and the caller then parsing)
+        # the raw_json of every row in a six-figure catalogue is what makes
+        # this slow. SQLite caps a statement at 999 host params, so chunk.
+        ids = list(only_item_ids)
+        rows = []
+        for i in range(0, len(ids), 900):
+            chunk = ids[i:i + 900]
+            placeholders = ",".join("?" * len(chunk))
+            rows.extend(db.conn.execute(
+                "SELECT item_id, name, category_id, container_ext, raw_json "
+                f"FROM items WHERE kind = ? AND removed_at IS NULL "
+                f"AND item_id IN ({placeholders})",
+                (kind, *chunk),
+            ).fetchall())
+    else:
+        rows = db.conn.execute(
+            "SELECT item_id, name, category_id, container_ext, raw_json FROM items "
+            "WHERE kind = ? AND removed_at IS NULL",
+            (kind,),
+        ).fetchall()
+
     id_field = LIST_ID_FIELD[kind]
     out = []
-    for row in cur.fetchall():
+    for row in rows:
         entry = None
         if row["raw_json"]:
             try:
@@ -144,25 +167,7 @@ def _normalize_vod_types(entry: dict) -> None:
         entry["tmdb"] = str(entry["tmdb"])
 
 
-def _filter_stream_list(state, data: list, kind: str) -> list:
-    db = state.db
-    cfg = state.config_mgr.get()
-    config_version = state.config_mgr.version
-    category_names = _category_names(db, kind)
-    visible_ids, _ = compute_visible_for_kind(
-        db, config_version, data_version.value, cfg, kind, category_names
-    )
-    id_field = LIST_ID_FIELD[kind]
-    result = []
-    for entry in data:
-        if not isinstance(entry, dict):
-            continue
-        raw_id = entry.get(id_field)
-        if raw_id is None:
-            continue
-        if str(raw_id) in visible_ids:
-            result.append(entry)
-
+def _renumber(result: list) -> list:
     # `num` is the item's position in *this* list, not a global id (that's
     # stream_id / series_id). The upstream value comes from the full
     # unfiltered catalog (e.g. num 34016 in a list of only 12908 items) --
@@ -197,10 +202,20 @@ def _filter_categories(state, data: list, kind: str) -> list:
 
 
 def _stream_list_response(state, kind: str) -> list:
-    """Blocking: build + filter a get_*_streams / get_series list from the
-    DB. Call via run_in_threadpool -- see player_api()."""
-    data = _db_list(state.db, kind)
-    return _filter_stream_list(state, data, kind)
+    """Blocking: build the filtered get_*_streams / get_series list from the
+    DB. Call via run_in_threadpool -- see player_api().
+
+    The visible-item set comes from the (cached) filter computation, so we
+    only parse the raw_json of rows that will actually be returned.
+    """
+    db = state.db
+    cfg = state.config_mgr.get()
+    visible_ids, _ = compute_visible_for_kind(
+        db, state.config_mgr.version, data_version.value, cfg, kind,
+        _category_names(db, kind),
+    )
+    entries = _db_list(db, kind, only_item_ids=visible_ids)
+    return _renumber(entries)
 
 
 def _categories_response(state, kind: str) -> list:
