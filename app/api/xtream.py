@@ -174,6 +174,12 @@ def _apply_vod_debug(db, entries: list) -> list:
             if isinstance(n, str):
                 e["name"] = "".join(_ASCII_FOLD.get(c, c) for c in n)
 
+    for p in parts:
+        if p.startswith("ext="):
+            forced = p.split("=", 1)[1]
+            for e in entries:
+                e["container_extension"] = forced
+
     return entries
 
 
