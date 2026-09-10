@@ -346,6 +346,51 @@ Your `data/` directory (config + database) is untouched by this.
 
 ---
 
+## Backups
+
+Nothing in the database is irreplaceable — `items`/`categories` come back
+on the next sync from the provider — but the **crawl results** (which
+titles have been probed, and their audio tracks) are not: on a
+single-connection account, re-probing tens of thousands of titles takes
+days. Worth backing up, especially on a Pi where the SD card is the
+weak point.
+
+`backup.sh` briefly pauses the crawler (a second or two — only for the
+file copy, not the whole run), checkpoints the WAL, copies the DB,
+resumes the crawler, then integrity-checks and gzips the copy (~40–60 MB).
+It keeps a few copies locally and optionally pushes to a remote target,
+skipping the remote step silently if it's unreachable.
+
+(`sqlite3 .backup` is deliberately not used: on a ~200 MB DB on an SD card,
+with the crawler writing continuously, it restarts on every write and can
+hang indefinitely.)
+
+```bash
+cp backup.env.example backup.env
+# edit backup.env: set REMOTE_DIR, or SMB_HOST/SMB_SHARE for a CIFS share
+./backup.sh            # test run — check data/backup.log
+```
+
+Then add it to cron (as the user that owns `data/`):
+
+```cron
+15 4 * * *  /home/you/xtream-filter-proxy/backup.sh
+```
+
+The SMB push mounts the share per run, so the cron user needs passwordless
+`sudo mount -t cifs` / `sudo umount`. On a dedicated box the simplest way
+is a line in `/etc/sudoers.d/`:
+
+```
+you ALL=(root) NOPASSWD: /usr/bin/mount, /usr/bin/umount, /usr/bin/mkdir
+```
+
+To restore: stop the container, `gunzip -c proxy-YYYYMMDD-HHMMSS.db.gz >
+data/proxy.db` (remove any stale `proxy.db-wal` / `proxy.db-shm`), start
+again.
+
+---
+
 ## Troubleshooting
 
 **The player still shows the unfiltered list.**

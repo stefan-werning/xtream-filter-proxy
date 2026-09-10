@@ -5,6 +5,7 @@ venv/
 data/
 config.yaml
 conf.txt
+backup.env
 *.db
 *.db-wal
 *.db-shm
