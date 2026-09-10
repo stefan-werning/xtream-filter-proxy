@@ -119,11 +119,6 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
   .loading-note { color: var(--hint-fg); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; }
-  .card.is-loading { position: relative; }
-  .card.is-loading::after {
-    content: ""; position: absolute; inset: 0; border-radius: inherit;
-    background: var(--card-bg); opacity: 0.35;
-  }
   .table-scroll { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 480px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--row-border); }
@@ -224,10 +219,6 @@
   details.adv { margin-top: 4px; }
   details.adv > summary { cursor: pointer; font-size: 13px; color: var(--label-fg); padding: 4px 0; }
 
-  /* --- skeleton --- */
-  .skeleton { border-radius: 4px; background: linear-gradient(90deg, var(--card-border) 25%, var(--row-border) 37%, var(--card-border) 63%); background-size: 400% 100%; animation: sk 1.4s ease infinite; }
-  @keyframes sk { 0% { background-position: 100% 50%; } 100% { background-position: 0 50%; } }
-  .skeleton-line { height: 12px; margin: 6px 0; }
   details.del-category { border: 1px solid var(--card-border); border-radius: 4px; margin-bottom: 6px; padding: 8px 10px; }
   details.del-category summary { cursor: pointer; font-weight: 600; }
   details.del-category .del-items { margin-top: 8px; max-height: 300px; overflow-y: auto; }
@@ -411,7 +402,6 @@
         </select>
       </label>
       <button id="btn-cats-save">Save</button>
-      <span id="cats-msg" class="hint"></span>
     </div>
     <div class="table-scroll">
       <table id="cats-table">
@@ -1197,11 +1187,9 @@ async function loadCategories() {
   if (!kind) {
     allCategories = [];
     tbody.innerHTML = `<tr><td colspan="3" class="hint">${t('js.chooseType')}</td></tr>`;
-    $('cats-msg').textContent = '';
     return;
   }
   tbody.innerHTML = `<tr><td colspan="3" class="loading-note"><span class="spinner"></span> ${t('js.loading')}</td></tr>`;
-  $('cats-msg').textContent = '';
   try {
     const r = await keyedFetch('categories', '/api/categories?kind=' + kind);
     const j = await r.json();
@@ -1251,7 +1239,6 @@ function renderCategories() {
       <td>${escHtml(c.category_name)}</td>
       <td class="hint">${c.item_count}</td>
     </tr>`).join('');
-  $('cats-msg').textContent = '';
 }
 
 // One delegated handler for all segmented buttons in the table.
