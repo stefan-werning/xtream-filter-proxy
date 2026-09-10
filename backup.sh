@@ -1,13 +1,10 @@
 #!/bin/bash
 # Nightly backup of the proxy's SQLite database.
 #
-#   - Briefly pauses the crawler, checkpoints the WAL, copies the DB file
-#     (now consistent, no active WAL), then resumes the crawler and gzips
-#     the copy (~40-60 MB). The crawler is paused for a second or two, not
-#     for the whole gzip.
-#     (`sqlite3 .backup` is avoided: on a large DB on an SD card, with the
-#     crawler writing continuously, it restarts on every write and can hang
-#     indefinitely.)
+#   - Takes a consistent snapshot with `sqlite3 ... "VACUUM INTO"` -- one
+#     atomic read transaction, already compacted, and it never writes to
+#     the live DB or its WAL. Safe to run while the crawler is going; no
+#     pause needed. Then gzips it (~30-50 MB).
 #   - Always keeps a few copies locally (fallback for when the remote is
 #     unreachable).
 #   - Optionally pushes to a remote directory. If the remote isn't
@@ -35,9 +32,6 @@ LOG="${LOG:-$APP_DIR/data/backup.log}"
 LOCAL_KEEP="${LOCAL_KEEP:-3}"
 REMOTE_KEEP="${REMOTE_KEEP:-14}"
 
-# URL the running proxy is reachable at, for the pause/resume calls.
-PROXY_URL="${PROXY_URL:-http://localhost:8080}"
-
 # Remote target. Two ways:
 #   1. REMOTE_DIR = an already-mounted path (NFS, sshfs, a USB disk).
 #   2. SMB_SHARE + SMB_OPTS + SMB_SUBDIR = mount //host/share with cifs,
@@ -62,48 +56,24 @@ if ! flock -n 9; then
   exit 0
 fi
 
-# --- consistent copy of the DB file ------------------------------------
+# --- consistent snapshot of the DB -----------------------------------
+# `VACUUM INTO` writes a full, self-contained, already-compacted copy in
+# one atomic read transaction. It never touches the live DB or its WAL --
+# no pause, no checkpoint, nothing that could race the running app. (An
+# earlier version paused the crawler and ran `wal_checkpoint(TRUNCATE)` on
+# the live file; that raced concurrent writes and corrupted a page.)
 mkdir -p "$LOCAL_DIR"
-RAW="$(mktemp "${LOCAL_DIR}/.tmp.XXXXXX.db")"
+RAW="$(mktemp -u "${LOCAL_DIR}/.tmp.XXXXXX.db")"   # -u: sqlite creates it
 
-paused=0
-if curl -fsS -X POST "$PROXY_URL/api/crawler/pause" >/dev/null 2>&1; then
-  paused=1
-  # give an in-flight write a moment to finish
-  sleep 2
-fi
-
-# checkpoint so the copied .db file is self-contained (fold the WAL in).
-# TRUNCATE also shrinks the -wal file. Ignore failure -- worst case the
-# copy just misses the last few writes, which the next backup catches.
-sqlite3 "$DB" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null 2>&1 || true
-
-cp_ok=0
-if cp "$DB" "$RAW"; then
-  # also grab the -wal if it's non-empty (checkpoint may not have flushed
-  # everything while a reader held on); sqlite replays it on open.
-  [ -s "${DB}-wal" ] && cp "${DB}-wal" "${RAW}-wal"
-  cp_ok=1
-fi
-
-[ "$paused" = 1 ] && curl -fsS -X POST "$PROXY_URL/api/crawler/resume" >/dev/null 2>&1
-
-if [ "$cp_ok" != 1 ]; then
-  log "ERROR: cp of DB failed"
-  rm -f "$RAW" "${RAW}-wal"
+if ! sqlite3 "$DB" "VACUUM INTO '$RAW';" 2>>"$LOG"; then
+  log "ERROR: VACUUM INTO failed"
+  rm -f "$RAW" "${RAW}-wal" "${RAW}-shm"
   exit 1
-fi
-
-# fold any copied -wal into the copy, then drop it, so the archive is a
-# single plain .db
-if [ -f "${RAW}-wal" ]; then
-  sqlite3 "$RAW" "PRAGMA wal_checkpoint(TRUNCATE);" >/dev/null 2>&1 || true
-  rm -f "${RAW}-wal" "${RAW}-shm"
 fi
 
 # integrity check before we trust it
 if ! sqlite3 "$RAW" "PRAGMA integrity_check;" 2>/dev/null | head -1 | grep -q '^ok$'; then
-  log "ERROR: integrity_check failed on the copy -- discarding"
+  log "ERROR: integrity_check failed on the snapshot -- discarding"
   rm -f "$RAW"
   exit 1
 fi

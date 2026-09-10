@@ -357,15 +357,12 @@ single-connection account, re-probing tens of thousands of titles takes
 days. Worth backing up, especially on a Pi where the SD card is the
 weak point.
 
-`backup.sh` briefly pauses the crawler (a second or two — only for the
-file copy, not the whole run), checkpoints the WAL, copies the DB,
-resumes the crawler, then integrity-checks and gzips the copy (~40–60 MB).
-It keeps a few copies locally and optionally pushes to a remote target,
-skipping the remote step silently if it's unreachable.
-
-(`sqlite3 .backup` is deliberately not used: on a ~200 MB DB on an SD card,
-with the crawler writing continuously, it restarts on every write and can
-hang indefinitely.)
+`backup.sh` takes a consistent snapshot with `sqlite3 … "VACUUM INTO"` —
+one atomic read transaction, already compacted, and it never writes to the
+live DB or its WAL, so it's safe to run while the crawler is going.
+It then integrity-checks and gzips the snapshot (~30–50 MB), keeps a few
+copies locally, and optionally pushes to a remote target (skipped silently
+if unreachable).
 
 Needs the `sqlite3` CLI (`apt install sqlite3`).
 
