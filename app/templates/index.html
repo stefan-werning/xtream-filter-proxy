@@ -141,6 +141,25 @@
   .progress-card-badges { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
   .status-line { font-size: 14px; margin-bottom: 8px; }
   .hint { color: var(--hint-fg); font-size: 12px; }
+
+  /* --- segmented control (category mode) --- */
+  .segmented { display: inline-flex; border: 1px solid var(--input-border); border-radius: 5px; overflow: hidden; }
+  .segmented button {
+    background: var(--input-bg); color: var(--label-fg);
+    border: none; border-right: 1px solid var(--input-border);
+    padding: 5px 10px; margin: 0; min-height: 0; font-size: 12px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .segmented button:last-child { border-right: none; }
+  .segmented button:hover:not(.on) { background: var(--card-border); }
+  .segmented button.on { color: var(--btn-fg); font-weight: 600; }
+  .segmented button.on.mode-filtered { background: var(--btn-secondary-bg); }
+  .segmented button.on.mode-excluded { background: var(--btn-danger-bg); }
+  .segmented button.on.mode-always_deliver { background: var(--badge-ok-fg); }
+  @media (max-width: 640px) {
+    .segmented { width: 100%; }
+    .segmented button { flex: 1; padding: 8px 4px; }
+  }
   /* --- info tooltip: pure CSS, anchored to its wrapper, no JS positioning --- */
   .info { position: relative; display: inline-block; margin-left: 4px; }
   .info > .info-icon {
@@ -1182,6 +1201,21 @@ const CAT_MODE_OPTS = [
   ['always_deliver', 'Always deliver'],
 ];
 
+function segmentedHtml(cid, cur) {
+  const btns = CAT_MODE_OPTS.map(([v, label]) =>
+    `<button type="button" data-id="${escHtml(cid)}" data-mode="${v}" ` +
+    `class="${v === cur ? 'on mode-' + v : ''}">${label}</button>`).join('');
+  return `<span class="segmented">${btns}</span>`;
+}
+
+function setCategoryMode(cid, mode) {
+  categoryModes[cid] = mode;
+  document.querySelectorAll(`.segmented button[data-id="${CSS.escape(cid)}"]`).forEach(b => {
+    const on = b.dataset.mode === mode;
+    b.className = on ? 'on mode-' + mode : '';
+  });
+}
+
 function renderCategories() {
   const tbody = document.querySelector('#cats-table tbody');
   if (!$('cats-kind').value || allCategories.length === 0) {
@@ -1190,30 +1224,29 @@ function renderCategories() {
   }
   const q = $('cats-q').value.toLowerCase();
   const filtered = allCategories.filter(c => c.category_name.toLowerCase().includes(q));
-  tbody.innerHTML = filtered.map(c => {
-    const cur = categoryModes[c.category_id] || 'filtered';
-    const opts = CAT_MODE_OPTS.map(([v, label]) =>
-      `<option value="${v}" ${v === cur ? 'selected' : ''}>${label}</option>`).join('');
-    return `<tr>
-      <td><select class="cat-mode" data-id="${escHtml(c.category_id)}" style="width:auto;">${opts}</select></td>
+  tbody.innerHTML = filtered.map(c => `
+    <tr>
+      <td>${segmentedHtml(c.category_id, categoryModes[c.category_id] || 'filtered')}</td>
       <td>${escHtml(c.category_name)}</td>
       <td class="hint">${c.item_count}</td>
-    </tr>`;
-  }).join('');
-  document.querySelectorAll('.cat-mode').forEach(sel => {
-    sel.onchange = () => { categoryModes[sel.dataset.id] = sel.value; };
-  });
+    </tr>`).join('');
   $('cats-msg').textContent = '';
 }
+
+// One delegated handler for all segmented buttons in the table.
+document.querySelector('#cats-table tbody').addEventListener('click', (e) => {
+  const b = e.target.closest('.segmented button');
+  if (b) setCategoryMode(b.dataset.id, b.dataset.mode);
+});
 
 $('cats-kind').onchange = loadCategories;
 $('cats-q').oninput = renderCategories;
 $('cats-bulk').onchange = () => {
   const mode = $('cats-bulk').value;
   if (!mode) return;
-  document.querySelectorAll('#cats-table .cat-mode').forEach(sel => {
-    sel.value = mode;
-    categoryModes[sel.dataset.id] = mode;
+  document.querySelectorAll('#cats-table .segmented').forEach(seg => {
+    const cid = seg.querySelector('button').dataset.id;
+    setCategoryMode(cid, mode);
   });
   $('cats-bulk').value = '';
 };
