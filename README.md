@@ -1,14 +1,9 @@
 # Xtream Filter Proxy
 
-A self-hosted proxy that sits between your IPTV player and an Xtream-Codes
-provider, and hands the player a **filtered** catalog — filtered by regex
-rules on the title, by audio language, and by category.
+An intelligent Xtream Codes API proxy that inspects actual video/audio streams using **FFprobe** and **HLS manifest parsing** to filter channels based on their real audio tracks and languages.
 
-The player never knows it isn't talking to the provider directly.
-
-Typical use: a provider bundles 150 000 movies in a dozen languages, and you
-only ever watch the German ones. Instead of scrolling past everything else,
-you point your player at this proxy and see only what matches your rules.
+> 💡 **Why this proxy is different:**  
+> Unlike traditional IPTV proxies that only filter text/titles via Regex, `xtream-filter-proxy` performs **Deep Stream Inspection**. It actively verifies the actual underlying audio streams (e.g., German, English, Multi-Audio) before delivering content to your player.
 
 **Works with any Xtream-Codes client**, e.g. **Smarters Pro**, **TiviMate**,
 or anything else offering an "Xtream Codes API" login type. Nothing
@@ -17,6 +12,13 @@ player-specific is required.
 > **Note:** This project only filters and forwards what your own provider
 > account already serves you. It contains no content, no provider list, and
 > no way to access anything you aren't already paying for.
+
+## ✨ Features
+
+* **Active Audio Track Detection:** Uses FFprobe / Stream Probing to identify and filter by real audio tracks (`ger`, `eng`, `und`, etc.), bypassing incomplete or wrong provider title tags.
+* **Xtream Codes API Compatibility:** Works seamlessly as a drop-in proxy between your IPTV provider and any Xtream-compatible player (TiviMate, IPTV Smarters, etc.).
+* **Smart Caching & Probing:** Analyzes streams in the background to minimize server load and avoid connection limits with your provider.
+* **Custom Regex & Title Filtering:** Optional traditional filtering by categories, channel names, and tags.
 
 ---
 
@@ -36,7 +38,12 @@ player-specific is required.
 
 ---
 
-## How it works
+## ⚙️ How It Works
+
+1. **API Requests:** The proxy intercepts requests from your IPTV client to the Xtream Codes API.
+2. **Stream Probing:** Instead of relying solely on channel titles like `|DE|` or `[EN]`, the proxy fetches stream headers and analyzes audio metadata using FFprobe / HLS manifest parsing.
+3. **Filtering:** Channels without the requested audio languages/tracks are hidden or filtered out automatically.
+4. **Playback:** Cleaned stream URLs are passed to your IPTV client.
 
 - You point your player at this proxy's URL instead of the provider's.
 - **List endpoints** (`get_live_streams`, `get_vod_streams`, `get_series`,
