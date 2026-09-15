@@ -28,6 +28,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "purge_after_days": 30,
         "log_max_age_days": 30,
         "log_max_rows": 5000,
+        "max_retries": 3,
     },
     "crawl_schedule": {
         "enabled": True,
@@ -143,6 +144,7 @@ def validate_config(cfg: dict[str, Any]) -> None:
         ("crawler", "sync_interval_minutes", 0),
         ("crawler", "slot_recheck_seconds", 1),
         ("crawler", "ffprobe_cooldown_seconds", 0),
+        ("crawler", "max_retries", 0),
         ("ffprobe", "timeout_seconds", 1),
     ]
     for section, key, minimum in _numeric:

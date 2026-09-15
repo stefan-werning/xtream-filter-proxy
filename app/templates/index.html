@@ -308,6 +308,9 @@
         <div class="col"><label>Reserved connection slots</label><input id="cfg-reserve" type="number" min="0">
           <div class="field-hint">Connections to keep free for your live viewing. On a single-connection account set 0 — otherwise the crawler can never run ffprobe.</div>
         </div>
+        <div class="col"><label>Max retries on error</label><input id="cfg-max-retries" type="number" min="0">
+          <div class="field-hint">How many times to automatically retry a failed probe before marking it as error and skipping it. Set to 0 to disable automatic retries.</div>
+        </div>
       </div>
       <div class="row">
         <div class="col"><label>ffprobe cooldown (seconds)</label><input id="cfg-ffprobe-cooldown" type="number" min="0">
@@ -968,6 +971,7 @@ async function loadSettings() {
   $('cfg-sync-interval').value = cfg.crawler.sync_interval_minutes;
   $('cfg-ffprobe-cooldown').value = cfg.crawler.ffprobe_cooldown_seconds;
   $('cfg-slot-recheck').value = cfg.crawler.slot_recheck_seconds;
+  $('cfg-max-retries').value = cfg.crawler.max_retries;
   $('cfg-ffprobe').value = String(cfg.ffprobe.enabled);
   $('cfg-ffprobe-timeout').value = cfg.ffprobe.timeout_seconds;
 
@@ -1012,6 +1016,7 @@ $('btn-save-settings').onclick = async () => {
       sync_interval_minutes: num('cfg-sync-interval', parseInt),
       ffprobe_cooldown_seconds: num('cfg-ffprobe-cooldown', parseInt),
       slot_recheck_seconds: num('cfg-slot-recheck', parseInt),
+      max_retries: num('cfg-max-retries', parseInt),
     }),
     ffprobe: dropUndefined({
       enabled: $('cfg-ffprobe').value === 'true',

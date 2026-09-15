@@ -14,7 +14,7 @@ def cfg_with(**crawler_over):
 
 
 def test_valid_numbers_pass():
-    validate_config(cfg_with(ffprobe_cooldown_seconds=0, slot_recheck_seconds=60, reserve_slots=1))
+    validate_config(cfg_with(ffprobe_cooldown_seconds=0, slot_recheck_seconds=60, reserve_slots=1, max_retries=0))
 
 
 def test_nan_is_rejected():
@@ -25,6 +25,8 @@ def test_nan_is_rejected():
 def test_negative_is_rejected():
     with pytest.raises(ConfigError):
         validate_config(cfg_with(reserve_slots=-1))
+    with pytest.raises(ConfigError):
+        validate_config(cfg_with(max_retries=-1))
 
 
 def test_string_is_rejected():

@@ -43,6 +43,9 @@ crawler:
   purge_after_days: 30
   log_max_age_days: 30
   log_max_rows: 5000
+  # How many times to automatically retry a failed probe before marking
+  # it as 'error' and skipping it.
+  max_retries: 3
 
 crawl_schedule:
   enabled: true

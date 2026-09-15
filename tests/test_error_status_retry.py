@@ -83,3 +83,80 @@ async def test_error_retry_allows_ffprobe(tmp_path):
     worker._fetch_tracks = fake_fetch
     await worker._probe_item({}, client=None, item={"kind": "vod", "item_id": "v1"})
     assert seen == [True]
+
+
+@pytest.mark.asyncio
+async def test_probe_error_stops_retrying_after_max_retries(tmp_path):
+    db = Database(tmp_path / "test.db")
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        "upstream:\n"
+        "  base_url: http://x\n"
+        "  username: u\n"
+        "  password: p\n"
+        "crawler:\n"
+        "  max_retries: 2\n"
+    )
+    worker = CrawlerWorker(db, ConfigManager(cfg_path))
+    insert(db, "vod", "v1")
+
+    async def boom(cfg, client, kind, item_id, allow_ffprobe):
+        raise RuntimeError("failed")
+
+    worker._fetch_tracks = boom
+
+    # 1st attempt
+    await worker._probe_item({}, client=None, item={"kind": "vod", "item_id": "v1"})
+    row = db.conn.execute("SELECT status, attempts, next_try FROM probe_state WHERE item_id='v1'").fetchone()
+    assert row["status"] == "error"
+    assert row["attempts"] == 1
+    assert row["next_try"] is not None  # Should have scheduled a retry because 1 < 2
+
+    # 2nd attempt (attempts becomes 2 >= max_retries)
+    await worker._probe_item({}, client=None, item={"kind": "vod", "item_id": "v1"})
+    row = db.conn.execute("SELECT status, attempts, next_try FROM probe_state WHERE item_id='v1'").fetchone()
+    assert row["status"] == "error"
+    assert row["attempts"] == 2
+    assert row["next_try"] is None  # Should NOT have scheduled a retry because 2 >= 2
+
+    # Should not be picked up by _next_pending_item
+    got = worker._next_pending_item({})
+    assert got is None
+
+
+@pytest.mark.asyncio
+async def test_manual_retry_resets_max_retries(tmp_path):
+    db = Database(tmp_path / "test.db")
+    cfg_path = tmp_path / "config.yaml"
+    cfg_path.write_text(
+        "upstream:\n"
+        "  base_url: http://x\n"
+        "  username: u\n"
+        "  password: p\n"
+        "crawler:\n"
+        "  max_retries: 2\n"
+    )
+    worker = CrawlerWorker(db, ConfigManager(cfg_path))
+    insert(db, "vod", "v1")
+
+    async def boom(cfg, client, kind, item_id, allow_ffprobe):
+        raise RuntimeError("failed")
+
+    worker._fetch_tracks = boom
+
+    # Run twice so next_try becomes NULL (stops retrying)
+    await worker._probe_item({}, client=None, item={"kind": "vod", "item_id": "v1"})
+    await worker._probe_item({}, client=None, item={"kind": "vod", "item_id": "v1"})
+
+    row = db.conn.execute("SELECT status, attempts, next_try FROM probe_state WHERE item_id='v1'").fetchone()
+    assert row["status"] == "error"
+    assert row["next_try"] is None
+
+    # Manually trigger retry_error_probes
+    worker.retry_error_probes()
+
+    row = db.conn.execute("SELECT status, attempts, next_try FROM probe_state WHERE item_id='v1'").fetchone()
+    assert row["status"] == "pending"
+    assert row["attempts"] == 0
+    assert row["next_try"] is not None  # is reset to current timestamp
+

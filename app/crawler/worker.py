@@ -387,7 +387,7 @@ class CrawlerWorker:
                 "SELECT ps.item_id FROM probe_state ps "
                 "JOIN items i ON i.kind = ps.kind AND i.item_id = ps.item_id "
                 "WHERE ps.kind = ? AND ps.status IN ('pending', 'deferred', 'error') "
-                "AND (ps.next_try IS NULL OR ps.next_try <= ?) "
+                "AND ((ps.status != 'error' OR ps.next_try IS NOT NULL) AND (ps.next_try IS NULL OR ps.next_try <= ?)) "
                 "AND i.removed_at IS NULL "
                 "ORDER BY (ps.status = 'pending') DESC, ps.priority DESC, ps.next_try ASC LIMIT 1",
                 (kind, now),
@@ -710,8 +710,12 @@ class CrawlerWorker:
                 # probes" can see it) but schedule an automatic retry via
                 # next_try -- _next_pending_item picks up due 'error' rows
                 # just like 'pending' ones.
-                backoff = min(3600, 60 * (2 ** min(attempts, 6)))
-                next_try = now + backoff
+                max_retries = self.config_mgr.get()["crawler"].get("max_retries", 3)
+                if attempts < max_retries:
+                    backoff = min(3600, 60 * (2 ** min(attempts, 6)))
+                    next_try = now + backoff
+                else:
+                    next_try = None
             cur.execute(
                 "UPDATE probe_state SET status = ?, source = ?, attempts = ?, last_try = ?, "
                 "next_try = ?, error = ?, priority = 0 WHERE kind = ? AND item_id = ?",
