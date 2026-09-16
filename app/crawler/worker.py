@@ -362,6 +362,11 @@ class CrawlerWorker:
            `active_cons - 1` (other connections, i.e. real streams) against
            the limit, or a max_connections==1 account could never pass.
         """
+        # Wenn "Ignore active connections" aktiv ist, überspringen wir die 
+        # restriktiven Prüfungen (Cooldown/Recheck), die den Crawler sonst stoppen.
+        if cfg.get("crawler", {}).get("ignore_active_cons", False):
+            return True
+
         cooldown = cfg["crawler"].get("ffprobe_cooldown_seconds", 15)
         if time.time() - self._last_ffprobe_ts < cooldown:
             return False
@@ -369,9 +374,6 @@ class CrawlerWorker:
         recheck = cfg.get("crawler", {}).get("slot_recheck_seconds", 60)
         if time.time() - self._last_busy_slot_ts < recheck:
             return False
-
-        if cfg.get("crawler", {}).get("ignore_active_cons", False):
-            return True
 
         try:
             user_info = await client.player_api({"action": ""})
