@@ -413,11 +413,15 @@ class CrawlerWorker:
         # If the slot is busy OR ffprobe cooldown is active, we cannot run ffprobe.
         # Thus, we should only process fresh 'pending' items (which do not require
         # ffprobe on their very first check).
-        status_filter = "('pending')" if (slot_busy or cooldown_active) else "('pending', 'deferred', 'error')"
+        if slot_busy or cooldown_active:
+            status_filter = "('pending')"
+            logger.debug("Slot busy or cooldown active, restricting to 'pending' items only.")
+        else:
+            status_filter = "('pending', 'deferred', 'error')"
 
         for kind in ("vod", "series"):
             cur = self.db.conn.execute(
-                "SELECT ps.item_id FROM probe_state ps "
+                "SELECT ps.item_id, ps.status FROM probe_state ps "
                 "JOIN items i ON i.kind = ps.kind AND i.item_id = ps.item_id "
                 f"WHERE ps.kind = ? AND ps.status IN {status_filter} "
                 "AND ((ps.status != 'error' OR ps.next_try IS NOT NULL) AND (ps.next_try IS NULL OR ps.next_try <= ?)) "
@@ -427,6 +431,7 @@ class CrawlerWorker:
             )
             row = cur.fetchone()
             if row is not None:
+                logger.debug(f"Picking {kind}:{row['item_id']} with status {row['status']} (slot_busy={slot_busy}, cooldown_active={cooldown_active})")
                 candidates[kind] = row["item_id"]
 
         if not candidates:
