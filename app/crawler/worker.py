@@ -47,6 +47,7 @@ class CrawlerWorker:
         # connection limit (HTTP 458 -> ffprobe exit 1). We hold off for
         # ffprobe_cooldown_seconds after each run.
         self._last_ffprobe_ts = 0.0
+        self._last_busy_slot_ts = 0.0
 
     # -- public control -------------------------------------------------
 
@@ -347,6 +348,10 @@ class CrawlerWorker:
         if time.time() - self._last_ffprobe_ts < cooldown:
             return False
 
+        recheck = cfg["crawler"].get("slot_recheck_seconds", 60)
+        if time.time() - self._last_busy_slot_ts < recheck:
+            return False
+
         try:
             user_info = await client.player_api({"action": ""})
         except UpstreamError:
@@ -363,7 +368,10 @@ class CrawlerWorker:
 
         other_connections = max(0, active - 1)  # minus this very check call
         reserve = cfg["crawler"].get("reserve_slots", 1)
-        return other_connections < max_conns - reserve
+        has_slot = other_connections < max_conns - reserve
+        if not has_slot:
+            self._last_busy_slot_ts = time.time()
+        return has_slot
 
     async def _sleep_checking_stop(self, seconds: float) -> None:
         end = time.time() + seconds
@@ -382,11 +390,16 @@ class CrawlerWorker:
         """
         now = int(time.time())
         candidates: dict[str, str] = {}
+        
+        recheck = cfg.get("crawler", {}).get("slot_recheck_seconds", 60)
+        slot_busy = (time.time() - self._last_busy_slot_ts < recheck)
+        status_filter = "('pending')" if slot_busy else "('pending', 'deferred', 'error')"
+
         for kind in ("vod", "series"):
             cur = self.db.conn.execute(
                 "SELECT ps.item_id FROM probe_state ps "
                 "JOIN items i ON i.kind = ps.kind AND i.item_id = ps.item_id "
-                "WHERE ps.kind = ? AND ps.status IN ('pending', 'deferred', 'error') "
+                f"WHERE ps.kind = ? AND ps.status IN {status_filter} "
                 "AND ((ps.status != 'error' OR ps.next_try IS NOT NULL) AND (ps.next_try IS NULL OR ps.next_try <= ?)) "
                 "AND i.removed_at IS NULL "
                 "ORDER BY (ps.status = 'pending') DESC, ps.priority DESC, ps.next_try ASC LIMIT 1",
