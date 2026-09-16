@@ -639,7 +639,8 @@ class CrawlerWorker:
                 # later without a backoff penalty, instead of recording it
                 # as no_audio_info/using an incomplete API result just
                 # because a slot wasn't available.
-                if not await self._has_free_slot(cfg, client):
+                # Auch hier: Wenn Brute Force aktiv ist, ignorieren wir die Slot-Prüfung
+                if not cfg.get("crawler", {}).get("ignore_active_cons", False) and not await self._has_free_slot(cfg, client):
                     return [], "api", True, False
                 last_attempted_source = "ffprobe"
                 try:
