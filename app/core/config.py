@@ -164,15 +164,6 @@ def validate_config(cfg: dict[str, Any]) -> None:
             f"crawler.ignore_active_cons must be a boolean (got {iac!r})"
         )
 
-    # ignore_active_cons must be a real bool. A string like "false" (e.g.
-    # from an older UI that sent the raw form value) is truthy in Python
-    # and would silently enable Brute Force mode forever.
-    iac = cfg.get("crawler", {}).get("ignore_active_cons")
-    if iac is not None and not isinstance(iac, bool):
-        raise ConfigError(
-            f"crawler.ignore_active_cons must be a boolean (got {iac!r})"
-        )
-
 
 class ConfigManager:
     """Thread-safe holder for config with hot-reload / write-back support."""
