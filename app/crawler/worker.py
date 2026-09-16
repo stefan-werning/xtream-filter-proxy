@@ -314,17 +314,22 @@ class CrawlerWorker:
             recheck = cfg.get("crawler", {}).get("slot_recheck_seconds", 60)
             cooldown = cfg.get("crawler", {}).get("ffprobe_cooldown_seconds", 15)
             
-            slot_busy = (time.time() - self._last_busy_slot_ts < recheck)
-            cooldown_active = (time.time() - self._last_ffprobe_ts < cooldown)
+            time_since_busy = time.time() - self._last_busy_slot_ts
+            time_since_ffprobe = time.time() - self._last_ffprobe_ts
             
-            if slot_busy:
+            slot_busy = time_since_busy < recheck
+            cooldown_active = time_since_ffprobe < cooldown
+            
+            if slot_busy or cooldown_active:
                 self._set_status(STATUS_WAITING_FOR_SLOT)
-            elif cooldown_active:
-                self._set_status(STATUS_WAITING_FOR_SLOT)  # keep it simple or use waiting_for_slot
+                # Sleep for the remainder of the longest active restriction
+                wait_time = max(0, 
+                                recheck - time_since_busy if slot_busy else 0,
+                                cooldown - time_since_ffprobe if cooldown_active else 0)
+                await self._sleep_checking_stop(max(1, wait_time))
             else:
                 self._set_status(STATUS_IDLE)
-                
-            await self._sleep_checking_stop(5)
+                await self._sleep_checking_stop(5)
             return
 
         self._set_status(STATUS_RUNNING, current_item=f"{item['kind']}:{item['item_id']}")
