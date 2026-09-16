@@ -285,6 +285,15 @@ class CrawlerWorker:
             await self._sleep_checking_stop(5)
             return
 
+        logger.debug(
+            "loop: paused=%s ignore_active_cons=%s last_busy_slot=%.1fs ago "
+            "last_ffprobe=%.1fs ago",
+            self.is_paused(),
+            cfg.get("crawler", {}).get("ignore_active_cons", False),
+            time.time() - self._last_busy_slot_ts if self._last_busy_slot_ts else -1,
+            time.time() - self._last_ffprobe_ts if self._last_ffprobe_ts else -1,
+        )
+
         sync_interval = cfg["crawler"].get("sync_interval_minutes", 360) * 60
         if time.time() - self._last_sync_ts >= sync_interval:
             # A full sync can take a while (upstream round-trips for every
@@ -310,20 +319,30 @@ class CrawlerWorker:
 
         item = self._next_pending_item(cfg)
         if item is None:
-            # If we are waiting for a slot or cooldown to clear, show that status
+            # If we are waiting for a slot or cooldown to clear, show that
+            # status. With ignore_active_cons ("Brute Force") enabled the
+            # slot/cooldown gates are bypassed entirely, so there is nothing
+            # to wait for -- otherwise a stale _last_busy_slot_ts /
+            # _last_ffprobe_ts from before the flag was flipped would keep
+            # the loop parked in waiting_for_slot forever.
+            if cfg.get("crawler", {}).get("ignore_active_cons", False):
+                self._set_status(STATUS_IDLE)
+                await self._sleep_checking_stop(5)
+                return
+
             recheck = cfg.get("crawler", {}).get("slot_recheck_seconds", 60)
             cooldown = cfg.get("crawler", {}).get("ffprobe_cooldown_seconds", 15)
-            
+
             time_since_busy = time.time() - self._last_busy_slot_ts
             time_since_ffprobe = time.time() - self._last_ffprobe_ts
-            
+
             slot_busy = time_since_busy < recheck
             cooldown_active = time_since_ffprobe < cooldown
-            
+
             if slot_busy or cooldown_active:
                 self._set_status(STATUS_WAITING_FOR_SLOT)
                 # Sleep for the remainder of the longest active restriction
-                wait_time = max(0, 
+                wait_time = max(0,
                                 recheck - time_since_busy if slot_busy else 0,
                                 cooldown - time_since_ffprobe if cooldown_active else 0)
                 await self._sleep_checking_stop(max(1, wait_time))
@@ -362,9 +381,13 @@ class CrawlerWorker:
            `active_cons - 1` (other connections, i.e. real streams) against
            the limit, or a max_connections==1 account could never pass.
         """
-        # Wenn "Ignore active connections" aktiv ist, überspringen wir die 
-        # restriktiven Prüfungen (Cooldown/Recheck), die den Crawler sonst stoppen.
+        # Wenn "Ignore active connections" aktiv ist, überspringen wir die
+        # restriktiven Prüfungen (Cooldown/Recheck), die den Crawler sonst
+        # stoppen. Die Zeitstempel werden dabei zurückgesetzt, damit ein
+        # späteres Ausschalten des Flags nicht sofort wieder blockiert.
         if cfg.get("crawler", {}).get("ignore_active_cons", False):
+            self._last_busy_slot_ts = 0.0
+            self._last_ffprobe_ts = 0.0
             return True
 
         cooldown = cfg["crawler"].get("ffprobe_cooldown_seconds", 15)
@@ -413,13 +436,21 @@ class CrawlerWorker:
         """
         now = int(time.time())
         candidates: dict[str, str] = {}
-        
-        recheck = cfg.get("crawler", {}).get("slot_recheck_seconds", 60)
-        cooldown = cfg.get("crawler", {}).get("ffprobe_cooldown_seconds", 15)
-        
-        slot_busy = (time.time() - self._last_busy_slot_ts < recheck)
-        cooldown_active = (time.time() - self._last_ffprobe_ts < cooldown)
-        
+
+        # With ignore_active_cons ("Brute Force") the slot/cooldown gates are
+        # bypassed, so 'deferred' items (which are waiting for their ffprobe
+        # retry) must stay eligible -- otherwise a stale timestamp from
+        # before the flag was flipped would starve them forever.
+        if cfg.get("crawler", {}).get("ignore_active_cons", False):
+            slot_busy = False
+            cooldown_active = False
+        else:
+            recheck = cfg.get("crawler", {}).get("slot_recheck_seconds", 60)
+            cooldown = cfg.get("crawler", {}).get("ffprobe_cooldown_seconds", 15)
+
+            slot_busy = (time.time() - self._last_busy_slot_ts < recheck)
+            cooldown_active = (time.time() - self._last_ffprobe_ts < cooldown)
+
         # If the slot is busy OR ffprobe cooldown is active, we cannot run ffprobe.
         # Thus, we should only process fresh 'pending' items (which do not require
         # ffprobe on their very first check).
@@ -657,7 +688,11 @@ class CrawlerWorker:
                     # -- a slot that looked free but wasn't yet. Treat it
                     # like a busy slot: retry without a backoff penalty
                     # instead of burning an attempt on a hard 'error'.
-                    if "exit code 1:" in msg and msg.strip().endswith("exit code 1:"):
+                    if (
+                        not cfg.get("crawler", {}).get("ignore_active_cons", False)
+                        and "exit code 1:" in msg
+                        and msg.strip().endswith("exit code 1:")
+                    ):
                         return [], "ffprobe", True, False
                     raise
                 self._last_ffprobe_ts = time.time()
