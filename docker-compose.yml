@@ -6,6 +6,13 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+    # Keep the container log from growing without bound on the Pi's SD card;
+    # rotate at 10 MB with three retained files.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     # Must exceed uvicorn's --timeout-graceful-shutdown (130s, see Dockerfile)
     # so `docker compose down`/`stop` never SIGKILLs mid-connection -- the
     # upstream account allows only a single concurrent connection.

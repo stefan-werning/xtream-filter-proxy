@@ -18,7 +18,12 @@ from app.core.db import Database
 from app.core.events import broker
 from app.crawler.worker import CrawlerWorker
 
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# INFO by default so a long crawl doesn't flood the container log with every
+# httpx request; set LOG_LEVEL=DEBUG to re-enable the verbose crawler trace.
+logging.basicConfig(
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = os.environ.get("PROXY_CONFIG", str(BASE_DIR.parent / "config.yaml"))
