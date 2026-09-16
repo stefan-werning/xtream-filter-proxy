@@ -285,17 +285,6 @@ class CrawlerWorker:
             await self._sleep_checking_stop(5)
             return
 
-        # If the slot was recently found to be busy, sleep for the remainder of
-        # slot_recheck_seconds instead of continuously scanning other pending
-        # items in tight loops.
-        recheck = cfg.get("crawler", {}).get("slot_recheck_seconds", 60)
-        time_since_busy = time.time() - self._last_busy_slot_ts
-        if time_since_busy < recheck:
-            self._set_status(STATUS_WAITING_FOR_SLOT)
-            sleep_time = max(1, recheck - time_since_busy)
-            await self._sleep_checking_stop(sleep_time)
-            return
-
         sync_interval = cfg["crawler"].get("sync_interval_minutes", 360) * 60
         if time.time() - self._last_sync_ts >= sync_interval:
             # A full sync can take a while (upstream round-trips for every
@@ -321,7 +310,20 @@ class CrawlerWorker:
 
         item = self._next_pending_item(cfg)
         if item is None:
-            self._set_status(STATUS_IDLE)
+            # If we are waiting for a slot or cooldown to clear, show that status
+            recheck = cfg.get("crawler", {}).get("slot_recheck_seconds", 60)
+            cooldown = cfg.get("crawler", {}).get("ffprobe_cooldown_seconds", 15)
+            
+            slot_busy = (time.time() - self._last_busy_slot_ts < recheck)
+            cooldown_active = (time.time() - self._last_ffprobe_ts < cooldown)
+            
+            if slot_busy:
+                self._set_status(STATUS_WAITING_FOR_SLOT)
+            elif cooldown_active:
+                self._set_status(STATUS_WAITING_FOR_SLOT)  # keep it simple or use waiting_for_slot
+            else:
+                self._set_status(STATUS_IDLE)
+                
             await self._sleep_checking_stop(5)
             return
 
@@ -403,8 +405,15 @@ class CrawlerWorker:
         candidates: dict[str, str] = {}
         
         recheck = cfg.get("crawler", {}).get("slot_recheck_seconds", 60)
+        cooldown = cfg.get("crawler", {}).get("ffprobe_cooldown_seconds", 15)
+        
         slot_busy = (time.time() - self._last_busy_slot_ts < recheck)
-        status_filter = "('pending')" if slot_busy else "('pending', 'deferred', 'error')"
+        cooldown_active = (time.time() - self._last_ffprobe_ts < cooldown)
+        
+        # If the slot is busy OR ffprobe cooldown is active, we cannot run ffprobe.
+        # Thus, we should only process fresh 'pending' items (which do not require
+        # ffprobe on their very first check).
+        status_filter = "('pending')" if (slot_busy or cooldown_active) else "('pending', 'deferred', 'error')"
 
         for kind in ("vod", "series"):
             cur = self.db.conn.execute(
