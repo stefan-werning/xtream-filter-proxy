@@ -311,6 +311,12 @@
         <div class="col"><label>Max retries on error</label><input id="cfg-max-retries" type="number" min="0">
           <div class="field-hint">How many times to automatically retry a failed probe before marking it as error and skipping it. Set to 0 to disable automatic retries.</div>
         </div>
+        <div class="col"><label>Ignore active connections</label><select id="cfg-ignore-active-cons">
+          <option value="false">No (Safer)</option>
+          <option value="true">Yes (Brute Force)</option>
+        </select>
+          <div class="field-hint">If enabled, the crawler ignores the provider's active connection count and attempts ffprobe even if the provider says the slot is busy. Use if the provider has stale/zombie sessions.</div>
+        </div>
       </div>
       <div class="row">
         <div class="col"><label>ffprobe cooldown (seconds)</label><input id="cfg-ffprobe-cooldown" type="number" min="0">
@@ -972,6 +978,7 @@ async function loadSettings() {
   $('cfg-ffprobe-cooldown').value = cfg.crawler.ffprobe_cooldown_seconds;
   $('cfg-slot-recheck').value = cfg.crawler.slot_recheck_seconds;
   $('cfg-max-retries').value = cfg.crawler.max_retries;
+  $('cfg-ignore-active-cons').value = String(cfg.crawler.ignore_active_cons ?? false);
   $('cfg-ffprobe').value = String(cfg.ffprobe.enabled);
   $('cfg-ffprobe-timeout').value = cfg.ffprobe.timeout_seconds;
 
@@ -1017,6 +1024,7 @@ $('btn-save-settings').onclick = async () => {
       ffprobe_cooldown_seconds: num('cfg-ffprobe-cooldown', parseInt),
       slot_recheck_seconds: num('cfg-slot-recheck', parseInt),
       max_retries: num('cfg-max-retries', parseInt),
+      ignore_active_cons: $('cfg-ignore-active-cons').value === 'true',
     }),
     ffprobe: dropUndefined({
       enabled: $('cfg-ffprobe').value === 'true',

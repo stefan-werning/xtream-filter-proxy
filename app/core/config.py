@@ -29,6 +29,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "log_max_age_days": 30,
         "log_max_rows": 5000,
         "max_retries": 3,
+        "ignore_active_cons": False,
     },
     "crawl_schedule": {
         "enabled": True,

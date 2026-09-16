@@ -361,9 +361,12 @@ class CrawlerWorker:
         if time.time() - self._last_ffprobe_ts < cooldown:
             return False
 
-        recheck = cfg["crawler"].get("slot_recheck_seconds", 60)
+        recheck = cfg.get("crawler", {}).get("slot_recheck_seconds", 60)
         if time.time() - self._last_busy_slot_ts < recheck:
             return False
+
+        if cfg.get("crawler", {}).get("ignore_active_cons", False):
+            return True
 
         try:
             user_info = await client.player_api({"action": ""})
