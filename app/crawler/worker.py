@@ -285,6 +285,17 @@ class CrawlerWorker:
             await self._sleep_checking_stop(5)
             return
 
+        # If the slot was recently found to be busy, sleep for the remainder of
+        # slot_recheck_seconds instead of continuously scanning other pending
+        # items in tight loops.
+        recheck = cfg.get("crawler", {}).get("slot_recheck_seconds", 60)
+        time_since_busy = time.time() - self._last_busy_slot_ts
+        if time_since_busy < recheck:
+            self._set_status(STATUS_WAITING_FOR_SLOT)
+            sleep_time = max(1, recheck - time_since_busy)
+            await self._sleep_checking_stop(sleep_time)
+            return
+
         sync_interval = cfg["crawler"].get("sync_interval_minutes", 360) * 60
         if time.time() - self._last_sync_ts >= sync_interval:
             # A full sync can take a while (upstream round-trips for every
