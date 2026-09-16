@@ -10,3 +10,4 @@ backup.env
 *.db-wal
 *.db-shm
 claude.sh
+.aider*
